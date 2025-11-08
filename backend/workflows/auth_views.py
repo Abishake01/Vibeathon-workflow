@@ -9,6 +9,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.middleware.csrf import get_token
+import secrets
 from .serializers import UserSerializer, UserRegistrationSerializer
 
 
@@ -115,22 +116,61 @@ def get_current_user(request):
 @permission_classes([AllowAny])
 def check_auth(request):
     """Check if user is authenticated and ensure CSRF cookie is set"""
-    # Ensure CSRF token is available - this will set the cookie
-    csrf_token = get_token(request)
+    csrf_token = None
+    try:
+        # Ensure CSRF token is available - this will set the cookie
+        csrf_token = get_token(request)
+    except Exception as e:
+        print(f"⚠️ CSRF token error in check_auth: {str(e)}")
+        # Generate a fallback token
+        csrf_token = secrets.token_urlsafe(32)
+    
+    # If still no token, generate one
+    if not csrf_token:
+        csrf_token = secrets.token_urlsafe(32)
     
     response_data = {
         'authenticated': False
     }
     
     if request.user.is_authenticated:
-        response_data = {
-            'authenticated': True,
-            'user': UserSerializer(request.user).data
-        }
+        try:
+            response_data = {
+                'authenticated': True,
+                'user': UserSerializer(request.user).data
+            }
+        except Exception as e:
+            print(f"⚠️ User serialization error in check_auth: {str(e)}")
+            response_data = {
+                'authenticated': True,
+                'user': {
+                    'id': request.user.id,
+                    'username': request.user.username,
+                    'email': request.user.email or '',
+                    'first_name': request.user.first_name or '',
+                    'last_name': request.user.last_name or ''
+                }
+            }
     
     response = Response(response_data, status=status.HTTP_200_OK)
     # Set CSRF token in response header for frontend to read
-    response['X-CSRFToken'] = csrf_token
+    if csrf_token:
+        response['X-CSRFToken'] = csrf_token
+        # Also set the cookie
+        from django.conf import settings
+        try:
+            response.set_cookie(
+                settings.CSRF_COOKIE_NAME,
+                csrf_token,
+                max_age=settings.CSRF_COOKIE_AGE if hasattr(settings, 'CSRF_COOKIE_AGE') else 31449600,
+                domain=settings.CSRF_COOKIE_DOMAIN if hasattr(settings, 'CSRF_COOKIE_DOMAIN') else None,
+                path=settings.CSRF_COOKIE_PATH if hasattr(settings, 'CSRF_COOKIE_PATH') else '/',
+                secure=settings.CSRF_COOKIE_SECURE if hasattr(settings, 'CSRF_COOKIE_SECURE') else False,
+                samesite=settings.CSRF_COOKIE_SAMESITE if hasattr(settings, 'CSRF_COOKIE_SAMESITE') else 'Lax',
+                httponly=settings.CSRF_COOKIE_HTTPONLY if hasattr(settings, 'CSRF_COOKIE_HTTPONLY') else False
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to set CSRF cookie in check_auth: {str(e)}")
     return response
 
 
@@ -138,10 +178,44 @@ def check_auth(request):
 @permission_classes([AllowAny])
 def get_csrf_token(request):
     """Get CSRF token endpoint - ensures cookie is set"""
-    csrf_token = get_token(request)
+    csrf_token = None
+    try:
+        # Try to get existing token first
+        csrf_token = get_token(request)
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"⚠️ CSRF token error in get_csrf_token: {str(e)}")
+        print(f"⚠️ Traceback: {error_trace}")
+        # Generate a fallback token
+        csrf_token = secrets.token_urlsafe(32)
+    
+    # If still no token, generate one
+    if not csrf_token:
+        csrf_token = secrets.token_urlsafe(32)
+    
     response = Response({
         'csrfToken': csrf_token
     }, status=status.HTTP_200_OK)
-    response['X-CSRFToken'] = csrf_token
+    
+    if csrf_token:
+        response['X-CSRFToken'] = csrf_token
+        
+        # Ensure the cookie is set in the response
+        from django.conf import settings
+        try:
+            response.set_cookie(
+                settings.CSRF_COOKIE_NAME,
+                csrf_token,
+                max_age=settings.CSRF_COOKIE_AGE if hasattr(settings, 'CSRF_COOKIE_AGE') else 31449600,
+                domain=settings.CSRF_COOKIE_DOMAIN if hasattr(settings, 'CSRF_COOKIE_DOMAIN') else None,
+                path=settings.CSRF_COOKIE_PATH if hasattr(settings, 'CSRF_COOKIE_PATH') else '/',
+                secure=settings.CSRF_COOKIE_SECURE if hasattr(settings, 'CSRF_COOKIE_SECURE') else False,
+                samesite=settings.CSRF_COOKIE_SAMESITE if hasattr(settings, 'CSRF_COOKIE_SAMESITE') else 'Lax',
+                httponly=settings.CSRF_COOKIE_HTTPONLY if hasattr(settings, 'CSRF_COOKIE_HTTPONLY') else False
+            )
+        except Exception as cookie_error:
+            print(f"⚠️ Failed to set CSRF cookie: {str(cookie_error)}")
+    
     return response
 
