@@ -937,3 +937,70 @@
     width: 100%;
   }
 }
+
+/* Floating AI Edit Button */
+#gjs-ai-edit-floating-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 10000;
+  pointer-events: none;
+}
+
+#gjs-ai-edit-floating-btn button {
+  pointer-events: all;
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  font-size: 24px;
+}
+
+#gjs-ai-edit-floating-btn button:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.6);
+}
+
+#gjs-ai-edit-floating-btn button:active {
+  transform: scale(0.95);
+}
+
+#gjs-ai-edit-floating-btn button svg {
+  width: 28px;
+  height: 28px;
+}
+
+/* AI Edit Toolbar Button */
+.ai-edit-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.ai-edit-toolbar-btn:hover {
+  background: rgba(102, 126, 234, 0.1);
+}
+
+/* Pulse animation for preview indicator */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.1);
+  }
+}

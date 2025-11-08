@@ -24,16 +24,7 @@ export const categories = [
     label: 'Memory', 
     description: 'Store and retrieve information, context, and conversation history' 
   },
-  { 
-    key: 'Document Loaders', 
-    label: 'Document Loaders', 
-    description: 'Load and parse various document formats' 
-  },
-  { 
-    key: 'Vector Stores', 
-    label: 'Vector Stores', 
-    description: 'Vector databases for semantic search and retrieval' 
-  },
+  // Removed Document Loaders and Vector Stores categories - no backend implementations
   { 
     key: 'Tools', 
     label: 'Tools', 

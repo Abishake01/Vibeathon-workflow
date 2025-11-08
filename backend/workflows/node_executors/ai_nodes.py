@@ -155,11 +155,36 @@ class AINodeExecutor(BaseNodeExecutor):
             # Get properties
             system_prompt = self.get_property('prompt', '# AI Agent System Prompt\n\nYou are a helpful AI assistant.')
             
-            # Get model from chat-model input or use default
-            model = chat_model_input.get('model', 'gpt-4-turbo') if chat_model_input else 'gpt-4-turbo'
-            temperature = chat_model_input.get('temperature', 0.7) if chat_model_input else 0.7
-            max_tokens = chat_model_input.get('max_tokens', 1024) if chat_model_input else 1024
-            base_url = chat_model_input.get('base_url') if chat_model_input else None
+            # Get model from chat-model input, node properties, or use default
+            model = None
+            if chat_model_input and 'model' in chat_model_input:
+                model = chat_model_input['model']
+            else:
+                # Check node properties for model
+                model = self.get_property('model', '')
+                if not model:
+                    # Try to detect model from API key type if available
+                    node_api_key = self.get_property('api_key', '')
+                    if node_api_key:
+                        if node_api_key.startswith('gsk_'):
+                            # Groq API key detected
+                            model = 'llama-3.1-8b-instant'
+                        elif node_api_key.startswith('sk-ant-'):
+                            # Anthropic API key detected
+                            model = 'claude-3-sonnet'
+                        elif not node_api_key.startswith('sk-') or len(node_api_key) < 30:
+                            # Google API key (doesn't start with sk- or is short)
+                            model = 'gemini-pro'
+                        else:
+                            # Default to OpenAI
+                            model = 'gpt-4-turbo'
+                    else:
+                        # Default to OpenAI
+                        model = 'gpt-4-turbo'
+            
+            temperature = chat_model_input.get('temperature', 0.7) if chat_model_input else self.get_property('temperature', 0.7)
+            max_tokens = chat_model_input.get('max_tokens', 1024) if chat_model_input else self.get_property('max_tokens', 1024)
+            base_url = chat_model_input.get('base_url') if chat_model_input else self.get_property('base_url', None)
             
             # Create memory if provided
             memory = None
@@ -360,38 +385,59 @@ class AINodeExecutor(BaseNodeExecutor):
             else:
                 self.log_execution("No memory input provided to AI Agent")
             
-            # Determine API key based on model
-            # First check if chat_model_input has an api_key (from the connected chat model node)
+            # Determine API key - priority: chat_model_input > node properties > context/env
             api_key = None
             if chat_model_input and 'api_key' in chat_model_input:
                 api_key = chat_model_input['api_key']
+                self.log_execution("Using API key from connected chat model")
             
-            # If no API key from chat model, determine based on model type
+            # If no API key from chat model, check node properties first
+            if not api_key:
+                api_key = self.get_property('api_key', '')
+                if api_key:
+                    self.log_execution("Using API key from node properties")
+            
+            # If still no API key, determine based on model type from context/env
             if not api_key:
                 if model.startswith('llama-') or model.startswith('mixtral-') or model.startswith('gemma-'):
                     # Use Groq API key
                     api_key = context.get('groq_api_key') or os.getenv('GROQ_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("Groq API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("Groq API key not found. Please configure it in the node settings or connect a Groq chat model node.")
                     base_url = base_url or "https://api.groq.com/openai/v1"
                 elif model.startswith('claude-'):
                     # Use Anthropic API key
                     api_key = context.get('anthropic_api_key') or os.getenv('ANTHROPIC_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("Anthropic API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("Anthropic API key not found. Please configure it in the node settings or connect an Anthropic chat model node.")
                     base_url = base_url or "https://api.anthropic.com/v1"
                 elif model.startswith('gemini-'):
                     # Use Google API key
                     api_key = context.get('google_api_key') or os.getenv('GOOGLE_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("Google API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("Google API key not found. Please configure it in the node settings or connect a Google Gemini chat model node.")
                     base_url = base_url or "https://generativelanguage.googleapis.com/v1"
                 else:
                     # Default to OpenAI
                     api_key = context.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("OpenAI API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("OpenAI API key not found. Please configure it in the node settings or connect an OpenAI chat model node.")
                     base_url = base_url or "https://api.openai.com/v1"
+            
+            # Set base_url based on API key type if not already set
+            if not base_url and api_key:
+                if api_key.startswith('gsk_'):
+                    # Groq API key
+                    base_url = "https://api.groq.com/openai/v1"
+                elif api_key.startswith('sk-ant-'):
+                    # Anthropic API key
+                    base_url = "https://api.anthropic.com/v1"
+                elif api_key.startswith('sk-') and len(api_key) > 50:
+                    # OpenAI API key (longer format)
+                    base_url = "https://api.openai.com/v1"
+                elif not api_key.startswith('sk-'):
+                    # Google API key (doesn't start with sk-)
+                    base_url = "https://generativelanguage.googleapis.com/v1"
             
             # Process tools input to create actual tool instances
             tool_instances = []
@@ -879,23 +925,67 @@ class AINodeExecutor(BaseNodeExecutor):
             categories = self.get_property('categories', 'positive, negative, neutral')
             category_list = [cat.strip() for cat in categories.split(',')]
             
-            api_key = context.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
+            # Get API key from node properties first, then context, then environment
+            api_key = self.get_property('api_key', '')
+            self.log_execution(f"API key from properties: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                api_key = context.get('groq_api_key') or context.get('openai_api_key') or os.getenv('GROQ_API_KEY') or os.getenv('OPENAI_API_KEY')
+                self.log_execution(f"API key from context/env: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                self.log_execution("ERROR: No API key found in properties, context, or environment")
+                raise NodeExecutionError("API key not found. Please configure it in the node settings or set OPENAI_API_KEY or GROQ_API_KEY environment variable.")
+            
+            # Ensure api_key is a string and not None
+            if api_key is None:
+                raise NodeExecutionError("API key is None. Please provide a valid API key.")
+            
+            api_key = str(api_key).strip()
+            if not api_key:
+                raise NodeExecutionError("API key is empty. Please provide a valid API key.")
+            
+            self.log_execution(f"Using API key type: {'Groq' if api_key.startswith('gsk_') else 'OpenAI'}")
+            
+            # Detect API key type and set model/base_url accordingly
+            if api_key.startswith('gsk_'):
+                # Groq API key
+                model = 'llama-3.1-8b-instant'
+                base_url = "https://api.groq.com/openai/v1"
+            else:
+                # OpenAI API key
+                model = 'gpt-4-turbo'
+                base_url = None  # Use default OpenAI URL
+            
+            # Final validation before creating Agent
+            if not api_key or api_key is None:
+                raise NodeExecutionError("API key validation failed. API key is None or empty.")
+            
+            self.log_execution(f"Creating Agent with model: {model}, base_url: {base_url}")
             agent = Agent(
                 name=self.label,
-                model='gpt-4-turbo',
+                model=model,
                 api_key=api_key,
+                base_url=base_url,
                 preamble=f"You are a text classifier. Classify the following text into one of these categories: {', '.join(category_list)}. Respond with only the category name."
             )
             
             self.log_execution(f"Classifying text into categories: {category_list}")
             category = agent.prompt(text)
             
+            # Return user-friendly format
+            result_text = f"Category: {category.strip()}"
+            
             return {
                 'main': {
                     'category': category.strip(),
                     'text': text,
-                    'available_categories': category_list
-                }
+                    'available_categories': category_list,
+                    'response': result_text,  # User-friendly response
+                    'output': result_text  # For compatibility
+                },
+                'text': result_text,  # Direct text access
+                'response': result_text  # Direct response access
             }
             
         except Exception as e:
@@ -913,11 +1003,48 @@ class AINodeExecutor(BaseNodeExecutor):
             if not text:
                 raise NodeExecutionError("No text provided for sentiment analysis")
             
-            api_key = context.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
+            # Get API key from node properties first, then context, then environment
+            api_key = self.get_property('api_key', '')
+            self.log_execution(f"API key from properties: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                api_key = context.get('groq_api_key') or context.get('openai_api_key') or os.getenv('GROQ_API_KEY') or os.getenv('OPENAI_API_KEY')
+                self.log_execution(f"API key from context/env: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                self.log_execution("ERROR: No API key found in properties, context, or environment")
+                raise NodeExecutionError("API key not found. Please configure it in the node settings or set OPENAI_API_KEY or GROQ_API_KEY environment variable.")
+            
+            # Ensure api_key is a string and not None
+            if api_key is None:
+                raise NodeExecutionError("API key is None. Please provide a valid API key.")
+            
+            api_key = str(api_key).strip()
+            if not api_key:
+                raise NodeExecutionError("API key is empty. Please provide a valid API key.")
+            
+            self.log_execution(f"Using API key type: {'Groq' if api_key.startswith('gsk_') else 'OpenAI'}")
+            
+            # Detect API key type and set model/base_url accordingly
+            if api_key.startswith('gsk_'):
+                # Groq API key
+                model = 'llama-3.1-8b-instant'
+                base_url = "https://api.groq.com/openai/v1"
+            else:
+                # OpenAI API key
+                model = 'gpt-4-turbo'
+                base_url = None  # Use default OpenAI URL
+            
+            # Final validation before creating Agent
+            if not api_key or api_key is None:
+                raise NodeExecutionError("API key validation failed. API key is None or empty.")
+            
+            self.log_execution(f"Creating Agent with model: {model}, base_url: {base_url}")
             agent = Agent(
                 name=self.label,
-                model='gpt-4-turbo',
+                model=model,
                 api_key=api_key,
+                base_url=base_url,
                 preamble="You are a sentiment analysis assistant. Analyze the sentiment of the text and respond with: positive, negative, or neutral, followed by a confidence score (0-1)."
             )
             
@@ -935,12 +1062,19 @@ class AINodeExecutor(BaseNodeExecutor):
             except:
                 pass
             
+            # Return user-friendly format
+            result_text = f"Sentiment: {sentiment.capitalize()} (Confidence: {confidence:.2f})"
+            
             return {
                 'main': {
                     'sentiment': sentiment,
                     'confidence': confidence,
-                    'text': text
-                }
+                    'text': text,
+                    'response': result_text,  # User-friendly response
+                    'output': result_text  # For compatibility
+                },
+                'text': result_text,  # Direct text access
+                'response': result_text  # Direct response access
             }
             
         except Exception as e:

@@ -11,54 +11,8 @@ import {
 } from '../base/commonProperties';
 
 export const chatModelNodes = {
-  'gpt-4-turbo': createChatModelNode({
-    name: 'GPT-4 Turbo',
-    category: 'Chat Models',
-    color: '#10a37f',
-    icon: 'SiOpenai',
-    description: 'Most capable GPT-4 model with 128k context',
-    properties: {
-      model: textProperty('Model', true),
-      temperature: temperatureProperty
-    }
-  }),
-
-  'gpt-3.5-turbo': createChatModelNode({
-    name: 'GPT-3.5 Turbo',
-    category: 'Chat Models',
-    color: '#10a37f',
-    icon: 'SiOpenai',
-    description: 'Fast and efficient GPT-3.5 model',
-    properties: {
-      model: textProperty('Model', true),
-      temperature: temperatureProperty
-    }
-  }),
-
-  'claude-3-opus': createChatModelNode({
-    name: 'Claude 3 Opus',
-    category: 'Chat Models',
-    color: '#d97757',
-    icon: 'BiBrain',
-    description: 'Most powerful Claude 3 model',
-    properties: {
-      model: textProperty('Model', true),
-      temperature: temperatureProperty
-    }
-  }),
-
-  'claude-3-sonnet': createChatModelNode({
-    name: 'Claude 3 Sonnet',
-    category: 'Chat Models',
-    color: '#d97757',
-    icon: 'BiBrain',
-    description: 'Balanced Claude 3 model',
-    properties: {
-      model: textProperty('Model', true),
-      temperature: temperatureProperty
-    }
-  }),
-
+  // Only Groq nodes have actual executors and can be used standalone
+  // For OpenAI and Anthropic, use the 'openai' and 'anthropic' AI nodes instead
   'groq-llama': createChatModelNode({
     name: 'Groq Llama',
     category: 'Chat Models',

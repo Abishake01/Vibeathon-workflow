@@ -7,8 +7,7 @@ import { triggerNodes } from './triggers';
 import { aiNodes } from './ai';
 import { chatModelNodes } from './chatModels';
 import { memoryNodes } from './memory';
-import { documentLoaderNodes } from './documentLoaders';
-import { vectorStoreNodes } from './vectorStores';
+// Removed documentLoaderNodes and vectorStoreNodes - no backend implementations
 import { toolNodes } from './tools';
 import { flowNodes } from './flow';
 import { dataNodes } from './data';
@@ -41,8 +40,7 @@ export const nodeTypeDefinitions = {
   ...convertIconsToJSX(aiNodes),
   ...convertIconsToJSX(chatModelNodes),
   ...convertIconsToJSX(memoryNodes),
-  ...convertIconsToJSX(documentLoaderNodes),
-  ...convertIconsToJSX(vectorStoreNodes),
+  // Removed documentLoaderNodes and vectorStoreNodes - no backend implementations
   ...convertIconsToJSX(toolNodes),
   ...convertIconsToJSX(flowNodes),
   ...convertIconsToJSX(dataNodes),
