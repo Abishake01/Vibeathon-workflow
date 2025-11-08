@@ -9,6 +9,17 @@
   flex-direction: column;
 }
 
+/* Spin animation for loading indicator */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
 /* Ensure the Studio Editor takes full space */
 .page-builder-studio > div {
   width: 100%;
