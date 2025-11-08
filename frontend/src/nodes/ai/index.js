@@ -5,8 +5,6 @@ import {
   operationProperty,
   modelSelectProperty,
   textProperty,
-  valueProperty,
-  jsonProperty,
   claudeModels,
   apiKeyProperty
 } from '../base/commonProperties';
@@ -76,39 +74,6 @@ export const aiNodes = {
     }
   }),
 
-  'question-answer-chain': createProcessingNode({
-    name: 'Question and Answer Chain',
-    category: 'AI',
-    color: '#f59e0b',
-    icon: 'FiMessageSquare',
-    description: 'Answer questions about retrieved documents',
-    properties: {
-      question: textProperty('Question', true, 'What question should be answered?')
-    }
-  }),
-
-  'summarization-chain': createProcessingNode({
-    name: 'Summarization Chain',
-    category: 'AI',
-    color: '#06b6d4',
-    icon: 'FiFileText',
-    description: 'Transforms text into a concise summary',
-    properties: {
-      maxLength: valueProperty(500, 100, 2000)
-    }
-  }),
-
-  'information-extractor': createProcessingNode({
-    name: 'Information Extractor',
-    category: 'AI',
-    color: '#10b981',
-    icon: 'BiData',
-    description: 'Extract information from text in a structured format',
-    properties: {
-      schema: jsonProperty('Extraction Schema', '{\n  "fields": ["name", "email", "company"]\n}')
-    }
-  }),
-
   'text-classifier': createProcessingNode({
     name: 'Text Classifier',
     category: 'AI',
@@ -117,7 +82,15 @@ export const aiNodes = {
     description: 'Classify your text into distinct categories',
     properties: {
       text: messageProperty(true),
-      categories: textProperty('Categories (comma separated)', true, 'positive, negative, neutral')
+      categories: textProperty('Categories (comma separated)', true, 'positive, negative, neutral'),
+      api_key: {
+        type: 'password',
+        label: 'API Key (OpenAI or Groq)',
+        default: '',
+        required: false,
+        placeholder: 'sk-... or gsk_...',
+        description: 'API key for text classification. Supports OpenAI (sk-...) or Groq (gsk_...) keys. If not provided, will use environment variables.'
+      }
     }
   }),
 
@@ -128,7 +101,15 @@ export const aiNodes = {
     icon: 'FiTrendingUp',
     description: 'Analyze the sentiment of your text',
     properties: {
-      text: messageProperty(true)
+      text: messageProperty(true),
+      api_key: {
+        type: 'password',
+        label: 'API Key (OpenAI or Groq)',
+        default: '',
+        required: false,
+        placeholder: 'sk-... or gsk_...',
+        description: 'API key for sentiment analysis. Supports OpenAI (sk-...) or Groq (gsk_...) keys. If not provided, will use environment variables.'
+      }
     }
   })
 };

@@ -304,7 +304,9 @@ class WorkflowExecutionEngine:
             
             # Debug logging for node data
             logger.info(f"Node data for {node_id}: {node}")
-            logger.info(f"Node properties: {node.get('data', {}).get('properties', {})}")
+            node_props = node.get('data', {}).get('properties', {})
+            logger.info(f"Node properties: {node_props}")
+            logger.info(f"API key in properties: {'***' + node_props.get('api_key', '')[-4:] if node_props.get('api_key') and len(node_props.get('api_key', '')) > 4 else 'NOT FOUND'}")
             
             # Evaluate expressions in node properties BEFORE creating executor
             # This ensures the executor has access to the latest evaluated properties

@@ -2,28 +2,8 @@ import { createToolNode } from '../base/nodeFactory';
 import { valueProperty, urlProperty, httpMethodProperty, selectProperty } from '../base/commonProperties';
 
 export const toolNodes = {
-  'calculator': createToolNode({
-    name: 'Calculator',
-    category: 'Tools',
-    color: '#10b981',
-    icon: 'FiHash',
-    description: 'Perform mathematical calculations',
-    properties: {
-      precision: valueProperty(2, 0, 10)
-    }
-  }),
-
-  'web-search': createToolNode({
-    name: 'Web Search',
-    category: 'Tools',
-    color: '#10b981',
-    icon: 'FiSearch',
-    description: 'Search the web for real-time information',
-    properties: {
-      maxResults: valueProperty(5, 1, 20)
-    }
-  }),
-
+  // Only DuckDuckGo Search is actually implemented and used by AI Agent
+  // calculator, web-search, and api-caller are registered but not implemented (just placeholders)
   'duckduckgo-search': createToolNode({
     name: 'DuckDuckGo Search',
     category: 'Tools',
@@ -49,17 +29,6 @@ export const toolNodes = {
         { value: 'in-en', label: 'India (English)' }
       ])
     }
-  }),
-
-  'api-caller': createToolNode({
-    name: 'API Caller',
-    category: 'Tools',
-    color: '#10b981',
-    icon: 'FiGlobe',
-    description: 'Make API calls to external services',
-    properties: {
-      url: urlProperty(true),
-      method: httpMethodProperty('GET')
-    }
   })
+  // Removed calculator, web-search, and api-caller - registered in backend but not actually implemented (just placeholders)
 };

@@ -925,23 +925,67 @@ class AINodeExecutor(BaseNodeExecutor):
             categories = self.get_property('categories', 'positive, negative, neutral')
             category_list = [cat.strip() for cat in categories.split(',')]
             
-            api_key = context.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
+            # Get API key from node properties first, then context, then environment
+            api_key = self.get_property('api_key', '')
+            self.log_execution(f"API key from properties: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                api_key = context.get('groq_api_key') or context.get('openai_api_key') or os.getenv('GROQ_API_KEY') or os.getenv('OPENAI_API_KEY')
+                self.log_execution(f"API key from context/env: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                self.log_execution("ERROR: No API key found in properties, context, or environment")
+                raise NodeExecutionError("API key not found. Please configure it in the node settings or set OPENAI_API_KEY or GROQ_API_KEY environment variable.")
+            
+            # Ensure api_key is a string and not None
+            if api_key is None:
+                raise NodeExecutionError("API key is None. Please provide a valid API key.")
+            
+            api_key = str(api_key).strip()
+            if not api_key:
+                raise NodeExecutionError("API key is empty. Please provide a valid API key.")
+            
+            self.log_execution(f"Using API key type: {'Groq' if api_key.startswith('gsk_') else 'OpenAI'}")
+            
+            # Detect API key type and set model/base_url accordingly
+            if api_key.startswith('gsk_'):
+                # Groq API key
+                model = 'llama-3.1-8b-instant'
+                base_url = "https://api.groq.com/openai/v1"
+            else:
+                # OpenAI API key
+                model = 'gpt-4-turbo'
+                base_url = None  # Use default OpenAI URL
+            
+            # Final validation before creating Agent
+            if not api_key or api_key is None:
+                raise NodeExecutionError("API key validation failed. API key is None or empty.")
+            
+            self.log_execution(f"Creating Agent with model: {model}, base_url: {base_url}")
             agent = Agent(
                 name=self.label,
-                model='gpt-4-turbo',
+                model=model,
                 api_key=api_key,
+                base_url=base_url,
                 preamble=f"You are a text classifier. Classify the following text into one of these categories: {', '.join(category_list)}. Respond with only the category name."
             )
             
             self.log_execution(f"Classifying text into categories: {category_list}")
             category = agent.prompt(text)
             
+            # Return user-friendly format
+            result_text = f"Category: {category.strip()}"
+            
             return {
                 'main': {
                     'category': category.strip(),
                     'text': text,
-                    'available_categories': category_list
-                }
+                    'available_categories': category_list,
+                    'response': result_text,  # User-friendly response
+                    'output': result_text  # For compatibility
+                },
+                'text': result_text,  # Direct text access
+                'response': result_text  # Direct response access
             }
             
         except Exception as e:
@@ -959,11 +1003,48 @@ class AINodeExecutor(BaseNodeExecutor):
             if not text:
                 raise NodeExecutionError("No text provided for sentiment analysis")
             
-            api_key = context.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
+            # Get API key from node properties first, then context, then environment
+            api_key = self.get_property('api_key', '')
+            self.log_execution(f"API key from properties: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                api_key = context.get('groq_api_key') or context.get('openai_api_key') or os.getenv('GROQ_API_KEY') or os.getenv('OPENAI_API_KEY')
+                self.log_execution(f"API key from context/env: {'***' + api_key[-4:] if api_key and len(api_key) > 4 else 'NOT FOUND'}")
+            
+            if not api_key or api_key.strip() == '':
+                self.log_execution("ERROR: No API key found in properties, context, or environment")
+                raise NodeExecutionError("API key not found. Please configure it in the node settings or set OPENAI_API_KEY or GROQ_API_KEY environment variable.")
+            
+            # Ensure api_key is a string and not None
+            if api_key is None:
+                raise NodeExecutionError("API key is None. Please provide a valid API key.")
+            
+            api_key = str(api_key).strip()
+            if not api_key:
+                raise NodeExecutionError("API key is empty. Please provide a valid API key.")
+            
+            self.log_execution(f"Using API key type: {'Groq' if api_key.startswith('gsk_') else 'OpenAI'}")
+            
+            # Detect API key type and set model/base_url accordingly
+            if api_key.startswith('gsk_'):
+                # Groq API key
+                model = 'llama-3.1-8b-instant'
+                base_url = "https://api.groq.com/openai/v1"
+            else:
+                # OpenAI API key
+                model = 'gpt-4-turbo'
+                base_url = None  # Use default OpenAI URL
+            
+            # Final validation before creating Agent
+            if not api_key or api_key is None:
+                raise NodeExecutionError("API key validation failed. API key is None or empty.")
+            
+            self.log_execution(f"Creating Agent with model: {model}, base_url: {base_url}")
             agent = Agent(
                 name=self.label,
-                model='gpt-4-turbo',
+                model=model,
                 api_key=api_key,
+                base_url=base_url,
                 preamble="You are a sentiment analysis assistant. Analyze the sentiment of the text and respond with: positive, negative, or neutral, followed by a confidence score (0-1)."
             )
             
@@ -981,12 +1062,19 @@ class AINodeExecutor(BaseNodeExecutor):
             except:
                 pass
             
+            # Return user-friendly format
+            result_text = f"Sentiment: {sentiment.capitalize()} (Confidence: {confidence:.2f})"
+            
             return {
                 'main': {
                     'sentiment': sentiment,
                     'confidence': confidence,
-                    'text': text
-                }
+                    'text': text,
+                    'response': result_text,  # User-friendly response
+                    'output': result_text  # For compatibility
+                },
+                'text': result_text,  # Direct text access
+                'response': result_text  # Direct response access
             }
             
         except Exception as e:

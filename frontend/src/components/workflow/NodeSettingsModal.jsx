@@ -134,28 +134,55 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
             
             // If output is an object with nested structure, try to extract meaningful data
             if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
+              // Priority: response/output (backend result) > sentiment/category (formatted) > text/content (input)
+              
+              // Check top-level response/output first (backend execution result)
+              if (output.response) {
+                output = output.response;
+              } else if (output.output) {
+                output = output.output;
+              }
               // If it has a 'main' key, use that
-              if ('main' in output) {
+              else if ('main' in output) {
                 const mainData = output.main;
-                // If main is an object, try to extract text/content
+                // If main is an object, prioritize backend result fields
                 if (typeof mainData === 'object' && mainData !== null) {
-                  output = mainData.text || mainData.content || mainData.message || mainData;
+                  // Priority: response/output (backend result) > sentiment/category (formatted) > text (input)
+                  if (mainData.response) {
+                    output = mainData.response;
+                  } else if (mainData.output) {
+                    output = mainData.output;
+                  } else if (mainData.sentiment) {
+                    // Format sentiment analysis result
+                    const sentiment = mainData.sentiment;
+                    const confidence = mainData.confidence || 0.5;
+                    output = `Sentiment: ${sentiment.charAt(0).toUpperCase() + sentiment.slice(1)} (Confidence: ${confidence.toFixed(2)})`;
+                  } else if (mainData.category) {
+                    // Format text classifier result
+                    output = `Category: ${mainData.category}`;
+                  } else {
+                    // Fallback to content/message, but NOT text (text is usually input)
+                    output = mainData.content || mainData.message || mainData;
+                  }
                 } else {
                   output = mainData;
                 }
+              }
+              // Check top-level response/output fields
+              else if (output.response) {
+                output = output.response;
+              } else if (output.output) {
+                output = output.output;
               }
               // If it has 'content' key, use that
               else if ('content' in output) {
                 output = output.content;
               }
-              // If it has 'text' key, use that
-              else if ('text' in output) {
-                output = output.text;
-              }
               // If it has 'message' key, use that
               else if ('message' in output) {
                 output = output.message;
               }
+              // Don't use 'text' as it's usually the input parameter, not the result
               // If it's an object but we haven't found a key, use the whole object
               else if (Object.keys(output).length > 0) {
                 // Keep the object as-is, it will be displayed in JSON view
@@ -164,20 +191,36 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
             }
           } else if (nodeResult) {
             output = nodeResult;
-            // Same extraction logic for nodeResult
+            // Same extraction logic for nodeResult - prioritize backend result
             if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
-              if ('main' in output) {
+              // Priority: response/output (backend result) > sentiment/category (formatted) > text (input)
+              if (output.response) {
+                output = output.response;
+              } else if (output.output) {
+                output = output.output;
+              } else if ('main' in output) {
                 const mainData = output.main;
                 if (typeof mainData === 'object' && mainData !== null) {
-                  output = mainData.text || mainData.content || mainData.message || mainData;
+                  // Priority: response/output (backend result) > sentiment/category (formatted) > text (input)
+                  if (mainData.response) {
+                    output = mainData.response;
+                  } else if (mainData.output) {
+                    output = mainData.output;
+                  } else if (mainData.sentiment) {
+                    const sentiment = mainData.sentiment;
+                    const confidence = mainData.confidence || 0.5;
+                    output = `Sentiment: ${sentiment.charAt(0).toUpperCase() + sentiment.slice(1)} (Confidence: ${confidence.toFixed(2)})`;
+                  } else if (mainData.category) {
+                    output = `Category: ${mainData.category}`;
+                  } else {
+                    output = mainData.content || mainData.message || mainData;
+                  }
                 } else {
                   output = mainData;
                 }
-              } else if ('content' in output) {
+              } else if (output.content) {
                 output = output.content;
-              } else if ('text' in output) {
-                output = output.text;
-              } else if ('message' in output) {
+              } else if (output.message) {
                 output = output.message;
               }
             }
@@ -588,87 +631,158 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
         const connectedApiKey = node.data?.type === 'ai-agent' && propKey === 'api_key' ? getApiKeyFromConnectedNodes : null;
         const showConnectedKeyHint = connectedApiKey && value === connectedApiKey;
         
-  return (
-          <div className="api-key-input-container">
-            {showConnectedKeyHint && (
-              <div className="api-key-source-hint" style={{ 
-                fontSize: '11px', 
-                color: 'var(--textSecondary)', 
-                marginBottom: '4px',
-                fontStyle: 'italic'
-              }}>
-                ✓ Using API key from connected chat model
+        // For API keys, don't show expression mode (they're sensitive)
+        if (isApiKey) {
+          return (
+            <div className="api-key-input-container">
+              {showConnectedKeyHint && (
+                <div className="api-key-source-hint" style={{ 
+                  fontSize: '11px', 
+                  color: 'var(--textSecondary)', 
+                  marginBottom: '4px',
+                  fontStyle: 'italic'
+                }}>
+                  ✓ Using API key from connected chat model
+                </div>
+              )}
+              <div className="api-key-input-wrapper">
+                <input
+                  type={isApiKey && !showApiKey[propKey] ? "password" : "text"}
+                  value={value}
+                  onChange={(e) => {
+                    if (isApiKey) {
+                      handleApiKeyChange(propKey, e.target.value);
+                    } else {
+                      handlePropertyChange(propKey, e.target.value);
+                    }
+                  }}
+                  onPaste={(e) => {
+                    if (isApiKey) {
+                      e.preventDefault();
+                      const pastedText = e.clipboardData.getData("text");
+                      handleApiKeyChange(propKey, pastedText);
+                    }
+                  }}
+                  placeholder={propDef.placeholder}
+                  required={propDef.required}
+                  className={`property-input ${
+                    validationState ? `api-key-${validationState}` : ""
+                  }`}
+                />
+                {isApiKey && (
+                  <button
+                    type="button"
+                    className="api-key-toggle-btn"
+                    onClick={() => {
+                      setShowApiKey((prev) => ({
+                        ...prev,
+                        [propKey]: !prev[propKey],
+                      }));
+                    }}
+                  >
+                    {showApiKey[propKey] ? "👁️" : "👁️‍🗨️"}
+                  </button>
+                )}
               </div>
-            )}
-            <div className="api-key-input-wrapper">
+              {isApiKey && (
+                <div className="api-key-status">
+                  {isTesting && (
+                    <div className="api-key-testing">Testing API key...</div>
+                  )}
+                  {validationState === "valid" && (
+                    <>
+                      <div className="api-key-valid">✅ API key is valid</div>
+                      {apiTestResponses[propKey] && (
+                        <div className="api-key-response">
+                          <pre className="api-key-json">
+                            {JSON.stringify({ status: apiTestResponses[propKey].status || 'active' }, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {validationState === "invalid" && (
+                    <>
+                      <div className="api-key-invalid">❌ API key is invalid</div>
+                      {apiTestResponses[propKey] && apiTestResponses[propKey].status && (
+                        <div className="api-key-response">
+                          <pre className="api-key-json">
+                            {JSON.stringify({ status: apiTestResponses[propKey].status }, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        }
+        
+        // For non-API key text inputs, add expression support
+        const textInputMode = promptModes[propKey] || "fixed";
+        return (
+          <div className="expression-input-container">
+            {/* Fixed/Expression Toggle */}
+            <div className="flex mb-2">
+              <div className="inline-flex rounded overflow-hidden border border-[#3d3d52]">
+                <button 
+                  onClick={() => setPromptModes(prev => ({ ...prev, [propKey]: "fixed" }))}
+                  className={`px-3 py-1.5 text-xs transition-colors ${
+                    textInputMode === "fixed"
+                      ? "bg-[#ff6d5a] text-white"
+                      : "bg-transparent text-[#aaa] hover:text-white"
+                  }`}
+                >
+                  Fixed
+                </button>
+                <button
+                  onClick={() => setPromptModes(prev => ({ ...prev, [propKey]: "expression" }))}
+                  className={`px-3 py-1.5 text-xs border-l border-[#3d3d52] transition-colors ${
+                    textInputMode === "expression"
+                      ? "bg-[#ff6d5a] text-white"
+                      : "bg-transparent text-[#aaa] hover:text-white"
+                  }`}
+                >
+                  Expression
+                </button>
+              </div>
+            </div>
+
+            {textInputMode === "fixed" ? (
               <input
-                type={isApiKey && !showApiKey[propKey] ? "password" : "text"}
+                type="text"
                 value={value}
-                onChange={(e) => {
-                  if (isApiKey) {
-                    handleApiKeyChange(propKey, e.target.value);
-                  } else {
-                    handlePropertyChange(propKey, e.target.value);
-                  }
-                }}
-                onPaste={(e) => {
-                  if (isApiKey) {
-                    e.preventDefault();
-                    const pastedText = e.clipboardData.getData("text");
-                    handleApiKeyChange(propKey, pastedText);
-                  }
-                }}
+                onChange={(e) => handlePropertyChange(propKey, e.target.value)}
                 placeholder={propDef.placeholder}
                 required={propDef.required}
-                className={`property-input ${
-                  validationState ? `api-key-${validationState}` : ""
-                }`}
+                className="property-input"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const variablePath = e.dataTransfer.getData('text/plain');
+                  if (variablePath) {
+                    handlePropertyChange(propKey, variablePath);
+                  }
+                }}
               />
-              {isApiKey && (
-                <button
-                  type="button"
-                  className="api-key-toggle-btn"
-                  onClick={() => {
-                    setShowApiKey((prev) => ({
-                      ...prev,
-                      [propKey]: !prev[propKey],
-                    }));
-                  }}
-                >
-                  {showApiKey[propKey] ? "👁️" : "👁️‍🗨️"}
-          </button>
-              )}
-          </div>
-            {isApiKey && (
-              <div className="api-key-status">
-                {isTesting && (
-                  <div className="api-key-testing">Testing API key...</div>
-                )}
-                {validationState === "valid" && (
-                  <>
-                    <div className="api-key-valid">✅ API key is valid</div>
-                    {apiTestResponses[propKey] && (
-                      <div className="api-key-response">
-                        <pre className="api-key-json">
-                          {JSON.stringify({ status: apiTestResponses[propKey].status || 'active' }, null, 2)}
-                        </pre>
-        </div>
-                    )}
-                  </>
-                )}
-                {validationState === "invalid" && (
-                  <>
-                    <div className="api-key-invalid">❌ API key is invalid</div>
-                    {apiTestResponses[propKey] && apiTestResponses[propKey].status && (
-                      <div className="api-key-response">
-                        <pre className="api-key-json">
-                          {JSON.stringify({ status: apiTestResponses[propKey].status }, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+            ) : (
+              <ExpressionEditor
+                ref={(el) => {
+                  expressionEditorRefs.current[propKey] = el;
+                }}
+                value={promptExpressions[propKey] || properties[propKey] || ''}
+                onChange={(newExpression) => {
+                  setPromptExpressions(prev => ({
+                    ...prev,
+                    [propKey]: newExpression
+                  }));
+                  handlePropertyChange(propKey, newExpression);
+                }}
+                onFocus={() => setActiveExpressionKey(propKey)}
+                jsonData={jsonData}
+                placeholder="Enter expression, e.g., ${{ $json.text }}"
+              />
             )}
           </div>
         );
@@ -779,15 +893,80 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
             </div>
           );
         }
-        // Default textarea for non-prompt fields
+        // Default textarea for non-prompt fields - add expression support
+        const textareaMode = promptModes[propKey] || "fixed";
         return (
-          <textarea
-            value={value}
-            onChange={(e) => handlePropertyChange(propKey, e.target.value)}
-            placeholder={propDef.placeholder}
-            rows={6}
-            className="property-textarea"
-          />
+          <div className="expression-input-container">
+            {/* Fixed/Expression Toggle */}
+            <div className="flex mb-2">
+              <div className="inline-flex rounded overflow-hidden border border-[#3d3d52]">
+                <button 
+                  onClick={() => setPromptModes(prev => ({ ...prev, [propKey]: "fixed" }))}
+                  className={`px-3 py-1.5 text-xs transition-colors ${
+                    textareaMode === "fixed"
+                      ? "bg-[#ff6d5a] text-white"
+                      : "bg-transparent text-[#aaa] hover:text-white"
+                  }`}
+                >
+                  Fixed
+                </button>
+                <button
+                  onClick={() => setPromptModes(prev => ({ ...prev, [propKey]: "expression" }))}
+                  className={`px-3 py-1.5 text-xs border-l border-[#3d3d52] transition-colors ${
+                    textareaMode === "expression"
+                      ? "bg-[#ff6d5a] text-white"
+                      : "bg-transparent text-[#aaa] hover:text-white"
+                  }`}
+                >
+                  Expression
+                </button>
+              </div>
+            </div>
+
+            {textareaMode === "fixed" ? (
+              <textarea
+                value={value}
+                onChange={(e) => handlePropertyChange(propKey, e.target.value)}
+                placeholder={propDef.placeholder}
+                rows={6}
+                className="property-textarea"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const variablePath = e.dataTransfer.getData('text/plain');
+                  if (variablePath) {
+                    const textarea = e.target;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    const before = value.substring(0, start);
+                    const after = value.substring(end);
+                    handlePropertyChange(propKey, before + variablePath + after);
+                    setTimeout(() => {
+                      textarea.setSelectionRange(start + variablePath.length, start + variablePath.length);
+                      textarea.focus();
+                    }, 0);
+                  }
+                }}
+              />
+            ) : (
+              <ExpressionEditor
+                ref={(el) => {
+                  expressionEditorRefs.current[propKey] = el;
+                }}
+                value={promptExpressions[propKey] || properties[propKey] || ''}
+                onChange={(newExpression) => {
+                  setPromptExpressions(prev => ({
+                    ...prev,
+                    [propKey]: newExpression
+                  }));
+                  handlePropertyChange(propKey, newExpression);
+                }}
+                onFocus={() => setActiveExpressionKey(propKey)}
+                jsonData={jsonData}
+                placeholder="Enter expression, e.g., ${{ $json.text }}"
+              />
+            )}
+          </div>
         );
 
       case "number":
@@ -1665,11 +1844,32 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                     </div>
                   ) : nodeOutput ? (
                     <pre className="output-json-content">
-                      {JSON.stringify(
-                        typeof nodeOutput === 'object' ? nodeOutput : { output: nodeOutput },
-                        null,
-                        2
-                      )}
+                      {(() => {
+                        // Get the full backend result from execution data
+                        const storedData = localStorage.getItem('workflow_execution_data');
+                        if (storedData) {
+                          try {
+                            const executionData = JSON.parse(storedData);
+                            const nodeState = executionData.node_states?.[node.id];
+                            const nodeResult = executionData.node_results?.[node.id];
+                            
+                            // Use the full backend result object if available
+                            const fullResult = nodeState?.output || nodeResult;
+                            if (fullResult && typeof fullResult === 'object') {
+                              return JSON.stringify(fullResult, null, 2);
+                            }
+                          } catch (e) {
+                            console.error('Error parsing execution data:', e);
+                          }
+                        }
+                        
+                        // Fallback to nodeOutput (formatted string or object)
+                        return JSON.stringify(
+                          typeof nodeOutput === 'object' ? nodeOutput : { output: nodeOutput },
+                          null,
+                          2
+                        );
+                      })()}
                     </pre>
                   ) : (
                     <div className="empty-output">
@@ -2748,6 +2948,67 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
 
         .api-key-invalid {
           color: #ef4444;
+        }
+
+        .expression-input-container {
+          width: 100%;
+        }
+
+        .expression-input-container .flex {
+          display: flex;
+          align-items: center;
+        }
+
+        .expression-input-container .inline-flex {
+          display: inline-flex;
+        }
+
+        .expression-input-container .mb-2 {
+          margin-bottom: 8px;
+        }
+
+        .expression-input-container .rounded {
+          border-radius: 6px;
+        }
+
+        .expression-input-container .overflow-hidden {
+          overflow: hidden;
+        }
+
+        .expression-input-container .border {
+          border: 1px solid;
+        }
+
+        .expression-input-container .border-\\[\\#3d3d52\\] {
+          border-color: #3d3d52;
+        }
+
+        .expression-input-container .px-3 {
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+
+        .expression-input-container .py-1\\.5 {
+          padding-top: 6px;
+          padding-bottom: 6px;
+        }
+
+        .expression-input-container .text-xs {
+          font-size: 12px;
+        }
+
+        .expression-input-container .transition-colors {
+          transition: background-color 0.2s, color 0.2s;
+        }
+
+        .expression-input-container button {
+          cursor: pointer;
+          border: none;
+          outline: none;
+        }
+
+        .expression-input-container button:hover {
+          opacity: 0.9;
         }
         .api-key-response {
           margin-top: 8px;

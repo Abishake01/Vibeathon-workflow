@@ -651,18 +651,50 @@ function WorkflowBuilder() {
         if (result.execution?.node_states) {
           setNodeExecutionStates(result.execution.node_states);
           
-          // Store execution data in localStorage for VariablesPanel
-          const executionData = {
+          // Load existing execution data and merge with new data
+          const existingDataStr = localStorage.getItem('workflow_execution_data');
+          const existingData = existingDataStr ? JSON.parse(existingDataStr) : null;
+          let executionData = existingData || {
             workflow_id: currentWorkflowId || 'local',
             execution_id: result.execution_id || Date.now().toString(),
-            node_states: result.execution.node_states,
-            execution_order: result.execution.execution_order || Object.keys(result.execution.node_states),
+            node_states: {},
+            node_results: {},
+            execution_order: [],
             timestamp: new Date().toISOString()
           };
           
+          const existingNodeCount = Object.keys(executionData.node_states || {}).length;
+          
+          // Merge node_states - preserve existing data, only update newly executed nodes
+          executionData.node_states = {
+            ...executionData.node_states,
+            ...result.execution.node_states
+          };
+          
+          // Merge node_results if available
+          if (result.execution?.node_results) {
+            executionData.node_results = {
+              ...(executionData.node_results || {}),
+              ...result.execution.node_results
+            };
+          }
+          
+          // Merge execution_order - keep unique node IDs
+          const newExecutionOrder = result.execution.execution_order || Object.keys(result.execution.node_states);
+          const combinedOrder = [...new Set([...executionData.execution_order, ...newExecutionOrder])];
+          executionData.execution_order = combinedOrder;
+          
+          executionData.workflow_id = currentWorkflowId || executionData.workflow_id || 'local';
+          executionData.execution_id = result.execution_id || executionData.execution_id || Date.now().toString();
+          executionData.timestamp = new Date().toISOString();
+          
           try {
             localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
-            console.log('💾 Stored execution data in localStorage (run previous nodes)', executionData);
+            console.log('💾 Stored execution data in localStorage (run previous nodes) - merged:', {
+              existing_nodes: existingNodeCount,
+              new_nodes: Object.keys(result.execution.node_states).length,
+              total_nodes: Object.keys(executionData.node_states).length
+            });
             // Dispatch custom event to notify VariablesPanel
             window.dispatchEvent(new Event('workflowExecutionUpdate'));
           } catch (error) {
@@ -810,6 +842,40 @@ function WorkflowBuilder() {
           const nodeState = result.execution?.node_states?.[nodeId];
           const nodeResult = nodeState?.output || result.execution?.node_results?.[nodeId];
           
+          // Extract formatted output
+          let formattedOutput = 'Execution completed';
+          if (nodeResult) {
+            if (typeof nodeResult === 'string') {
+              formattedOutput = nodeResult;
+            } else if (nodeResult.response) {
+              formattedOutput = nodeResult.response;
+            } else if (nodeResult.output) {
+              formattedOutput = nodeResult.output;
+            } else if (nodeResult.text) {
+              formattedOutput = nodeResult.text;
+            } else if (nodeResult.main) {
+              if (typeof nodeResult.main === 'string') {
+                formattedOutput = nodeResult.main;
+              } else if (nodeResult.main.response) {
+                formattedOutput = nodeResult.main.response;
+              } else if (nodeResult.main.output) {
+                formattedOutput = nodeResult.main.output;
+              } else if (nodeResult.main.text) {
+                formattedOutput = nodeResult.main.text;
+              } else if (nodeResult.main.sentiment) {
+                const sentiment = nodeResult.main.sentiment;
+                const confidence = nodeResult.main.confidence || 0.5;
+                formattedOutput = `Sentiment: ${sentiment.charAt(0).toUpperCase() + sentiment.slice(1)} (Confidence: ${confidence.toFixed(2)})`;
+              } else if (nodeResult.main.category) {
+                formattedOutput = `Category: ${nodeResult.main.category}`;
+              } else {
+                formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+              }
+            } else {
+              formattedOutput = JSON.stringify(nodeResult, null, 2);
+            }
+          }
+          
           // Update node execution state
           setNodes((nds) =>
             nds.map((n) =>
@@ -820,7 +886,7 @@ function WorkflowBuilder() {
                       ...n.data,
                       executionState: {
                         status: result.status === 'error' ? 'error' : 'completed',
-                        output: nodeResult || 'Execution completed',
+                        output: formattedOutput,
                         startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
                         endTime: endTime
                       }
@@ -897,10 +963,26 @@ function WorkflowBuilder() {
             console.error('Error storing execution data:', error);
           }
           
+          // Add to execution history
+          const nodeExecution = {
+            id: Date.now() + Math.random(),
+            nodeType: node.data.type,
+            nodeName: node.data.label,
+            status: result.status === 'error' ? 'error' : 'completed',
+            startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
+            endTime: endTime,
+            source: 'single-node',
+            output: formattedOutput,
+            duration: endTime - (nodeState?.startTime ? new Date(nodeState.startTime).getTime() : Date.now())
+          };
+          setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
+          
           if (result.status === 'error') {
             showToast(`❌ Node execution failed: ${result.error || 'Unknown error'}`, 'error', 3000);
           } else {
-            showToast(`✅ Node "${node.data.label}" executed successfully`, 'success', 2000);
+            // Show formatted output in toast
+            const shortOutput = formattedOutput.length > 100 ? formattedOutput.substring(0, 100) + '...' : formattedOutput;
+            showToast(`✅ ${node.data.label}: ${shortOutput}`, 'success', 3000);
           }
         } else {
           const error = await response.json();
@@ -1219,20 +1301,47 @@ function WorkflowBuilder() {
             // Success case - extract text from output object
             let output = 'Execution completed';
             
-            if (nodeResult?.output) {
-              if (typeof nodeResult.output === 'string') {
-                output = nodeResult.output;
-              } else if (nodeResult.output.response) {
-                output = nodeResult.output.response;
-              } else if (nodeResult.output.text) {
-                output = nodeResult.output.text;
-              } else if (nodeResult.output.main?.text) {
-                output = nodeResult.output.main.text;
-              } else if (nodeResult.output.main?.response) {
-                output = nodeResult.output.main.response;
+            // Check nodeResult structure - it might be the output directly or nested
+            const resultData = nodeResult?.output || nodeResult;
+            
+            if (resultData) {
+              // First check for direct string
+              if (typeof resultData === 'string') {
+                output = resultData;
+              }
+              // Check top-level response/output fields (new format)
+              else if (resultData.response) {
+                output = resultData.response;
+              } else if (resultData.output) {
+                output = resultData.output;
+              } else if (resultData.text) {
+                output = resultData.text;
+              }
+              // Check main object fields
+              else if (resultData.main) {
+                if (typeof resultData.main === 'string') {
+                  output = resultData.main;
+                } else if (resultData.main.response) {
+                  output = resultData.main.response;
+                } else if (resultData.main.output) {
+                  output = resultData.main.output;
+                } else if (resultData.main.text) {
+                  output = resultData.main.text;
+                } else if (resultData.main.sentiment) {
+                  // Format sentiment analysis result
+                  const sentiment = resultData.main.sentiment;
+                  const confidence = resultData.main.confidence || 0.5;
+                  output = `Sentiment: ${sentiment.charAt(0).toUpperCase() + sentiment.slice(1)} (Confidence: ${confidence.toFixed(2)})`;
+                } else if (resultData.main.category) {
+                  // Format text classifier result
+                  output = `Category: ${resultData.main.category}`;
+                } else {
+                  // Fallback to stringify main object
+                  output = JSON.stringify(resultData.main, null, 2);
+                }
               } else {
                 // If it's still an object, stringify it
-                output = JSON.stringify(nodeResult.output, null, 2);
+                output = JSON.stringify(resultData, null, 2);
               }
             }
             
@@ -1533,18 +1642,50 @@ function WorkflowBuilder() {
     if (result.execution && result.execution.node_states) {
       const nodeStates = result.execution.node_states;
       
-          // Store execution data in localStorage for VariablesPanel
-          const executionData = {
+          // Load existing execution data and merge with new data
+          const existingDataStr = localStorage.getItem('workflow_execution_data');
+          const existingData = existingDataStr ? JSON.parse(existingDataStr) : null;
+          let executionData = existingData || {
             workflow_id: currentWorkflowId || 'local',
             execution_id: result.execution_id || Date.now().toString(),
-            node_states: nodeStates,
-            execution_order: result.execution.execution_order || Object.keys(nodeStates),
+            node_states: {},
+            node_results: {},
+            execution_order: [],
             timestamp: new Date().toISOString()
           };
           
+          const existingNodeCount = Object.keys(executionData.node_states || {}).length;
+          
+          // Merge node_states - preserve existing data, only update newly executed nodes
+          executionData.node_states = {
+            ...executionData.node_states,
+            ...nodeStates
+          };
+          
+          // Merge node_results if available
+          if (result.execution?.node_results) {
+            executionData.node_results = {
+              ...(executionData.node_results || {}),
+              ...result.execution.node_results
+            };
+          }
+          
+          // Merge execution_order - keep unique node IDs
+          const newExecutionOrder = result.execution.execution_order || Object.keys(nodeStates);
+          const combinedOrder = [...new Set([...executionData.execution_order, ...newExecutionOrder])];
+          executionData.execution_order = combinedOrder;
+          
+          executionData.workflow_id = currentWorkflowId || executionData.workflow_id || 'local';
+          executionData.execution_id = result.execution_id || executionData.execution_id || Date.now().toString();
+          executionData.timestamp = new Date().toISOString();
+          
           try {
             localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
-            console.log('💾 Stored execution data in localStorage (chat)', executionData);
+            console.log('💾 Stored execution data in localStorage (chat) - merged:', {
+              existing_nodes: existingNodeCount,
+              new_nodes: Object.keys(nodeStates).length,
+              total_nodes: Object.keys(executionData.node_states).length
+            });
             // Dispatch custom event to notify VariablesPanel
             window.dispatchEvent(new Event('workflowExecutionUpdate'));
           } catch (error) {
@@ -2160,23 +2301,51 @@ function WorkflowBuilder() {
         if (result.execution && result.execution.node_states) {
           const nodeStates = result.execution.node_states;
           
-          // Store execution data in localStorage for VariablesPanel
-          const executionData = {
+          // Load existing execution data and merge with new data
+          const existingDataStr = localStorage.getItem('workflow_execution_data');
+          const existingData = existingDataStr ? JSON.parse(existingDataStr) : null;
+          let executionData = existingData || {
             workflow_id: workflowId || currentWorkflowId || 'local',
             execution_id: result.execution_id || Date.now().toString(),
-            node_states: nodeStates,
-            node_results: result.execution?.node_results || {},
-            execution_order: result.execution.execution_order || Object.keys(nodeStates),
+            node_states: {},
+            node_results: {},
+            execution_order: [],
             timestamp: new Date().toISOString()
           };
           
+          const existingNodeCount = Object.keys(executionData.node_states || {}).length;
+          
+          // Merge node_states - preserve existing data, only update newly executed nodes
+          executionData.node_states = {
+            ...executionData.node_states,
+            ...nodeStates
+          };
+          
+          // Merge node_results if available
+          if (result.execution?.node_results) {
+            executionData.node_results = {
+              ...(executionData.node_results || {}),
+              ...result.execution.node_results
+            };
+          }
+          
+          // Merge execution_order - keep unique node IDs
+          const newExecutionOrder = result.execution.execution_order || Object.keys(nodeStates);
+          const combinedOrder = [...new Set([...executionData.execution_order, ...newExecutionOrder])];
+          executionData.execution_order = combinedOrder;
+          
+          executionData.workflow_id = workflowId || currentWorkflowId || executionData.workflow_id || 'local';
+          executionData.execution_id = result.execution_id || executionData.execution_id || Date.now().toString();
+          executionData.timestamp = new Date().toISOString();
+          
           try {
             localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
-            console.log('💾 Stored execution data in localStorage:', {
+            console.log('💾 Stored execution data in localStorage (manual trigger) - merged:', {
+              existing_nodes: existingNodeCount,
+              new_nodes: Object.keys(nodeStates).length,
+              total_nodes: Object.keys(executionData.node_states).length,
               workflow_id: executionData.workflow_id,
-              node_count: Object.keys(nodeStates).length,
-              execution_order: executionData.execution_order,
-              node_results_keys: Object.keys(executionData.node_results || {})
+              execution_order: executionData.execution_order
             });
             // Dispatch custom event to notify VariablesPanel and NodeSettingsModal
             window.dispatchEvent(new Event('workflowExecutionUpdate'));

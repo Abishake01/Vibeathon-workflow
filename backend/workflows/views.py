@@ -599,6 +599,55 @@ def test_api_key(request):
                     'error': f'Anthropic API key test failed: {error_msg}'
                 })
         
+        elif node_type in ['sentiment-analysis', 'text-classifier']:
+            # These nodes support both OpenAI and Groq API keys
+            # Detect API key type and test accordingly
+            if api_key.startswith('gsk_'):
+                # Test Groq API
+                try:
+                    from alith import Agent
+                    agent = Agent(
+                        name="test-agent",
+                        model="llama-3.1-8b-instant",
+                        api_key=api_key,
+                        base_url="https://api.groq.com/openai/v1"
+                    )
+                    response = agent.prompt(test_message)
+                    return Response({
+                        'valid': True,
+                        'status': 'active',
+                        'message': 'Groq API key is valid',
+                        'response': response[:100] + '...' if len(response) > 100 else response
+                    })
+                except Exception as e:
+                    error_msg = str(e) if str(e) else 'Unknown error occurred'
+                    return Response({
+                        'valid': False,
+                        'status': 'inactive',
+                        'error': f'Groq API key test failed: {error_msg}'
+                    })
+            else:
+                # Test OpenAI API
+                try:
+                    import openai
+                    client = openai.OpenAI(api_key=api_key)
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": test_message}],
+                        max_tokens=50
+                    )
+                    return Response({
+                        'valid': True,
+                        'message': 'OpenAI API key is valid',
+                        'response': response.choices[0].message.content
+                    })
+                except Exception as e:
+                    error_msg = str(e) if str(e) else 'Unknown error occurred'
+                    return Response({
+                        'valid': False,
+                        'error': f'OpenAI API key test failed: {error_msg}'
+                    })
+        
         else:
             return Response({
                 'valid': False,

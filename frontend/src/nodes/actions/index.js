@@ -24,18 +24,6 @@ export const actionNodes = {
         showIf: { method: ['POST', 'PUT', 'PATCH'] }
       }
     }
-  }),
-
-  'google-sheets': createProcessingNode({
-    name: 'Google Sheets',
-    category: 'Actions',
-    color: '#34a853',
-    icon: 'SiGooglesheets',
-    description: 'Read, update and write data to Google Sheets',
-    properties: {
-      operation: operationProperty(['append', 'update', 'read', 'delete'], 'append'),
-      spreadsheetId: textProperty('Spreadsheet ID', true),
-      range: textProperty('Range', true)
-    }
   })
+  // Removed google-sheets - not fully implemented in backend (placeholder only)
 };

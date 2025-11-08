@@ -33,16 +33,6 @@ export const memoryNodes = {
     properties: {
       maxMessages: valueProperty(10, 1, 100, 'Max Messages', 'Maximum number of messages to store')
     }
-  }),
-
-  'vector-memory': createMemoryNode({
-    name: 'Vector Memory',
-    category: 'Memory',
-    color: '#8b5cf6',
-    icon: 'FiDatabase',
-    description: 'Store and retrieve information using vector embeddings (legacy)',
-    properties: {
-      collection: textProperty('Collection Name', true, 'default')
-    }
   })
+  // Removed vector-memory - legacy node that just maps to WindowBufferMemory
 };
