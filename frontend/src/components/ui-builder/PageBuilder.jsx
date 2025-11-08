@@ -41,7 +41,18 @@ function PageBuilder() {
   const [importCss, setImportCss] = useState('');
   const [importJs, setImportJs] = useState('');
   const [importTab, setImportTab] = useState('html'); // 'html', 'css', 'js'
+  const [importMode, setImportMode] = useState('manual'); // 'manual' or 'ai'
   const [widgetName, setWidgetName] = useState('Custom Widget');
+  
+  // AI Generation state for import
+  const [aiImportDescription, setAiImportDescription] = useState('');
+  const [aiImportConversation, setAiImportConversation] = useState([]);
+  const [isGeneratingImport, setIsGeneratingImport] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewCss, setPreviewCss] = useState('');
+  const [previewJs, setPreviewJs] = useState('');
+  const [showPreview, setShowPreview] = useState(false);
+  const [chatMessage, setChatMessage] = useState('');
   const [currentProject, setCurrentProject] = useState(null);
   const [projectName, setProjectName] = useState('Untitled Project');
   const [serverProjectId, setServerProjectId] = useState(null); // Track server project ID
@@ -430,6 +441,211 @@ function PageBuilder() {
     };
   };
 
+  // Generate widget name from description
+  const generateWidgetName = useCallback((description) => {
+    if (!description || !description.trim()) {
+      return 'AI Generated Widget';
+    }
+    
+    // Remove common words and extract key terms
+    const stopWords = ['a', 'an', 'the', 'with', 'and', 'or', 'but', 'for', 'to', 'of', 'in', 'on', 'at', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'what', 'which', 'who', 'where', 'when', 'why', 'how'];
+    
+    // Extract meaningful words
+    const words = description
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.includes(word));
+    
+    // Take first 2-3 meaningful words and capitalize them
+    const keyWords = words.slice(0, 3);
+    
+    if (keyWords.length === 0) {
+      return 'AI Generated Widget';
+    }
+    
+    // Capitalize first letter of each word
+    const name = keyWords
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+    
+    return name || 'AI Generated Widget';
+  }, []);
+
+  // Generate initial design with AI
+  const handleGenerateImportDesign = useCallback(async () => {
+    if (!aiImportDescription.trim()) {
+      alert('Please provide a description for the design you want to generate.');
+      return;
+    }
+    
+    // Check if AI settings are configured
+    const savedSettings = localStorage.getItem('ai-chatbot-settings');
+    if (!savedSettings) {
+      const shouldConfigure = confirm('AI settings are not configured. Would you like to configure them now?');
+      if (shouldConfigure) {
+        setShowAISettingsModal(true);
+        return;
+      } else {
+        return;
+      }
+    }
+    
+    let settings = {};
+    try {
+      settings = JSON.parse(savedSettings);
+    } catch (e) {
+      console.error('Error parsing AI settings:', e);
+    }
+    
+    if (!settings.apiKey) {
+      const shouldConfigure = confirm('API key is missing. Would you like to configure AI settings now?');
+      if (shouldConfigure) {
+        setShowAISettingsModal(true);
+        return;
+      } else {
+        alert('API key is required to generate code. Please configure your AI settings.');
+        return;
+      }
+    }
+    
+    setIsGeneratingImport(true);
+    
+    // Generate widget name from description
+    const generatedName = generateWidgetName(aiImportDescription);
+    setWidgetName(generatedName);
+    
+    try {
+      const response = await apiService.request('/generate-ui-code/', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'generate',
+          description: aiImportDescription,
+          existing_html: '',
+          existing_css: '',
+          existing_js: '',
+          settings: settings
+        })
+      });
+      
+      if (response.error) {
+        alert(`Error: ${response.error}`);
+        return;
+      }
+      
+      // Set preview content
+      setPreviewHtml(response.html || '');
+      setPreviewCss(response.css || '');
+      setPreviewJs(response.js || '');
+      setShowPreview(true);
+      
+      // Add to conversation
+      setAiImportConversation([
+        { role: 'user', content: aiImportDescription },
+        { role: 'assistant', content: 'I\'ve generated the initial design. You can preview it and let me know if you\'d like any changes!' }
+      ]);
+      
+    } catch (error) {
+      console.error('Error generating design:', error);
+      alert(`Error generating design: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsGeneratingImport(false);
+    }
+  }, [aiImportDescription, generateWidgetName]);
+  
+  // Chat with AI to modify design
+  const handleChatWithAI = useCallback(async (message) => {
+    if (!message.trim()) return;
+    
+    const savedSettings = localStorage.getItem('ai-chatbot-settings');
+    if (!savedSettings) {
+      alert('AI settings are not configured.');
+      return;
+    }
+    
+    let settings = {};
+    try {
+      settings = JSON.parse(savedSettings);
+    } catch (e) {
+      console.error('Error parsing AI settings:', e);
+      return;
+    }
+    
+    if (!settings.apiKey) {
+      alert('API key is missing. Please configure your AI settings.');
+      return;
+    }
+    
+    setIsGeneratingImport(true);
+    
+    // Add user message to conversation
+    const updatedConversation = [...aiImportConversation, { role: 'user', content: message }];
+    setAiImportConversation(updatedConversation);
+    
+    try {
+      // Build context for AI
+      const contextMessage = `Current HTML:\n${previewHtml}\n\nCurrent CSS:\n${previewCss}\n\nCurrent JS:\n${previewJs}\n\nUser request: ${message}\n\nPlease provide updated HTML, CSS, and JS based on the user's request.`;
+      
+      const response = await apiService.request('/generate-ui-code/', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'edit',
+          description: contextMessage,
+          existing_html: previewHtml,
+          existing_css: previewCss,
+          existing_js: previewJs,
+          settings: settings
+        })
+      });
+      
+      if (response.error) {
+        alert(`Error: ${response.error}`);
+        return;
+      }
+      
+      // Update preview content
+      setPreviewHtml(response.html || previewHtml);
+      setPreviewCss(response.css || previewCss);
+      setPreviewJs(response.js || previewJs);
+      
+      // Add AI response to conversation
+      setAiImportConversation([
+        ...updatedConversation,
+        { role: 'assistant', content: 'I\'ve updated the design based on your request. Check the preview and let me know if you need any other changes!' }
+      ]);
+      
+    } catch (error) {
+      console.error('Error chatting with AI:', error);
+      alert(`Error: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsGeneratingImport(false);
+    }
+  }, [aiImportConversation, previewHtml, previewCss, previewJs]);
+  
+  // Finalize and import the design
+  const handleFinalizeImport = useCallback(() => {
+    if (!previewHtml.trim()) {
+      alert('No design to import. Please generate a design first.');
+      return;
+    }
+    
+    // Set the import values from preview
+    setImportHtml(previewHtml);
+    setImportCss(previewCss);
+    setImportJs(previewJs);
+    
+    // Switch to manual mode to show the code
+    setImportMode('manual');
+    setImportTab('html');
+    
+    // Show success message
+    const notification = document.createElement('div');
+    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
+    notification.textContent = '✓ Design ready to import! Review the code and click "Import Widget" when ready.';
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), 5000);
+  }, [previewHtml, previewCss, previewJs]);
+  
   // Handle import widget with HTML, CSS, and JS
   const handleImportWidget = useCallback(async () => {
     if (!editor || !importHtml.trim()) {
@@ -2161,7 +2377,7 @@ function PageBuilder() {
                   </svg>
                 </button>
               </div>
-              <div className="import-modal-body">
+              <div className="import-modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
                 {/* Widget Name Input */}
                 <div style={{ marginBottom: '16px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: theme === 'dark' ? '#fff' : '#333' }}>
@@ -2184,37 +2400,76 @@ function PageBuilder() {
                   />
                 </div>
 
-                {/* Tabs */}
+                {/* Mode Tabs (Manual / AI) */}
                 <div style={{ 
                   display: 'flex', 
                   borderBottom: `2px solid ${theme === 'dark' ? '#444' : '#e0e0e0'}`,
                   marginBottom: '16px'
                 }}>
-                  {['html', 'css', 'js'].map((tab) => (
+                  {['manual', 'ai'].map((mode) => (
                     <button
-                      key={tab}
-                      onClick={() => setImportTab(tab)}
+                      key={mode}
+                      onClick={() => {
+                        setImportMode(mode);
+                        if (mode === 'manual') {
+                          setImportTab('html');
+                        }
+                      }}
                       style={{
                         padding: '12px 24px',
                         border: 'none',
                         background: 'transparent',
-                        color: importTab === tab 
+                        color: importMode === mode 
                           ? (theme === 'dark' ? '#a855f7' : '#7c3aed')
                           : (theme === 'dark' ? '#999' : '#666'),
-                        fontWeight: importTab === tab ? '600' : '400',
+                        fontWeight: importMode === mode ? '600' : '400',
                         cursor: 'pointer',
-                        borderBottom: importTab === tab 
+                        borderBottom: importMode === mode 
                           ? `3px solid ${theme === 'dark' ? '#a855f7' : '#7c3aed'}`
                           : '3px solid transparent',
-                        textTransform: 'uppercase',
+                        textTransform: 'capitalize',
                         fontSize: '13px',
                         transition: 'all 0.2s'
                       }}
                     >
-                      {tab.toUpperCase()}
+                      {mode === 'ai' ? '✨ Generate with AI' : '📝 Manual Import'}
                     </button>
                   ))}
                 </div>
+
+                {/* Manual Mode - Code Tabs */}
+                {importMode === 'manual' && (
+                  <div style={{ 
+                    display: 'flex', 
+                    borderBottom: `2px solid ${theme === 'dark' ? '#444' : '#e0e0e0'}`,
+                    marginBottom: '16px'
+                  }}>
+                    {['html', 'css', 'js'].map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setImportTab(tab)}
+                        style={{
+                          padding: '12px 24px',
+                          border: 'none',
+                          background: 'transparent',
+                          color: importTab === tab 
+                            ? (theme === 'dark' ? '#a855f7' : '#7c3aed')
+                            : (theme === 'dark' ? '#999' : '#666'),
+                          fontWeight: importTab === tab ? '600' : '400',
+                          cursor: 'pointer',
+                          borderBottom: importTab === tab 
+                            ? `3px solid ${theme === 'dark' ? '#a855f7' : '#7c3aed'}`
+                            : '3px solid transparent',
+                          textTransform: 'uppercase',
+                          fontSize: '13px',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        {tab.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {/* Tab Content */}
                 <div style={{ position: 'relative' }}>
@@ -2298,6 +2553,247 @@ function PageBuilder() {
                       />
                     </div>
                   )}
+
+                  {/* AI Mode - Generation and Chat */}
+                  {importMode === 'ai' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      {/* Initial Generation Section */}
+                      {!showPreview && (
+                        <div>
+                          <label style={{ 
+                            display: 'block', 
+                            marginBottom: '8px', 
+                            fontWeight: '600', 
+                            color: theme === 'dark' ? '#fff' : '#333' 
+                          }}>
+                            Describe the design you want to generate:
+                          </label>
+                          <textarea
+                            placeholder="e.g., A modern pricing card with gradient background, three pricing tiers, and hover effects"
+                            value={aiImportDescription}
+                            onChange={(e) => setAiImportDescription(e.target.value)}
+                            rows={4}
+                            style={{
+                              width: '100%',
+                              padding: '12px',
+                              borderRadius: '6px',
+                              border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                              backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                              color: theme === 'dark' ? '#fff' : '#333',
+                              fontSize: '14px',
+                              resize: 'vertical',
+                              marginBottom: '12px'
+                            }}
+                          />
+                          <button
+                            onClick={handleGenerateImportDesign}
+                            disabled={!aiImportDescription.trim() || isGeneratingImport}
+                            style={{
+                              padding: '10px 20px',
+                              borderRadius: '6px',
+                              border: 'none',
+                              background: (!aiImportDescription.trim() || isGeneratingImport)
+                                ? (theme === 'dark' ? '#444' : '#ccc')
+                                : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                              color: '#fff',
+                              cursor: (!aiImportDescription.trim() || isGeneratingImport) ? 'not-allowed' : 'pointer',
+                              fontWeight: '600',
+                              opacity: (!aiImportDescription.trim() || isGeneratingImport) ? 0.6 : 1
+                            }}
+                          >
+                            {isGeneratingImport ? 'Generating...' : '✨ Generate Design'}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Preview and Chat Section */}
+                      {showPreview && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                          {/* Preview Section */}
+                          <div>
+                            <div style={{ 
+                              display: 'flex', 
+                              justifyContent: 'space-between', 
+                              alignItems: 'center',
+                              marginBottom: '12px'
+                            }}>
+                              <label style={{ 
+                                fontWeight: '600', 
+                                color: theme === 'dark' ? '#fff' : '#333' 
+                              }}>
+                                Preview:
+                              </label>
+                              <button
+                                onClick={handleFinalizeImport}
+                                style={{
+                                  padding: '8px 16px',
+                                  borderRadius: '6px',
+                                  border: 'none',
+                                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                                  color: '#fff',
+                                  cursor: 'pointer',
+                                  fontWeight: '600',
+                                  fontSize: '13px'
+                                }}
+                              >
+                                ✓ Finalize & Import
+                              </button>
+                            </div>
+                            <div
+                              style={{
+                                border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                                borderRadius: '6px',
+                                padding: '20px',
+                                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                                minHeight: '300px',
+                                maxHeight: '400px',
+                                overflow: 'auto'
+                              }}
+                            >
+                              <iframe
+                                title="Preview"
+                                srcDoc={`
+                                  <!DOCTYPE html>
+                                  <html>
+                                  <head>
+                                    <meta charset="UTF-8">
+                                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                    <script src="https://cdn.tailwindcss.com"></script>
+                                    <style>${previewCss}</style>
+                                  </head>
+                                  <body style="margin: 0; padding: 0;">
+                                    ${previewHtml}
+                                    <script>${previewJs}</script>
+                                  </body>
+                                  </html>
+                                `}
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  minHeight: '300px',
+                                  border: 'none',
+                                  borderRadius: '4px'
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Chat Section */}
+                          <div>
+                            <label style={{ 
+                              display: 'block', 
+                              marginBottom: '8px', 
+                              fontWeight: '600', 
+                              color: theme === 'dark' ? '#fff' : '#333' 
+                            }}>
+                              Chat with AI to modify the design:
+                            </label>
+                            
+                            {/* Conversation History */}
+                            <div
+                              style={{
+                                border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                                borderRadius: '6px',
+                                padding: '12px',
+                                backgroundColor: theme === 'dark' ? '#1a1a1a' : '#f9fafb',
+                                maxHeight: '200px',
+                                overflowY: 'auto',
+                                marginBottom: '12px',
+                                fontSize: '13px'
+                              }}
+                            >
+                              {aiImportConversation.length === 0 ? (
+                                <div style={{ 
+                                  color: theme === 'dark' ? '#999' : '#666',
+                                  fontStyle: 'italic',
+                                  textAlign: 'center',
+                                  padding: '20px'
+                                }}>
+                                  Start a conversation to modify your design...
+                                </div>
+                              ) : (
+                                aiImportConversation.map((msg, idx) => (
+                                  <div
+                                    key={idx}
+                                    style={{
+                                      marginBottom: '12px',
+                                      padding: '8px 12px',
+                                      borderRadius: '6px',
+                                      backgroundColor: msg.role === 'user' 
+                                        ? (theme === 'dark' ? '#2a2a2a' : '#e5e7eb')
+                                        : (theme === 'dark' ? '#1e3a5f' : '#dbeafe'),
+                                      color: theme === 'dark' ? '#fff' : '#333'
+                                    }}
+                                  >
+                                    <div style={{ 
+                                      fontWeight: '600', 
+                                      marginBottom: '4px',
+                                      fontSize: '12px',
+                                      color: theme === 'dark' ? '#a855f7' : '#7c3aed'
+                                    }}>
+                                      {msg.role === 'user' ? 'You' : 'AI'}
+                                    </div>
+                                    <div>{msg.content}</div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+
+                            {/* Chat Input */}
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <input
+                                type="text"
+                                placeholder="e.g., Make the colors more vibrant, add animations..."
+                                value={chatMessage}
+                                onChange={(e) => setChatMessage(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    if (chatMessage.trim()) {
+                                      handleChatWithAI(chatMessage);
+                                      setChatMessage('');
+                                    }
+                                  }
+                                }}
+                                style={{
+                                  flex: 1,
+                                  padding: '10px 12px',
+                                  borderRadius: '6px',
+                                  border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                                  backgroundColor: theme === 'dark' ? '#2a2a2a' : '#fff',
+                                  color: theme === 'dark' ? '#fff' : '#333',
+                                  fontSize: '14px'
+                                }}
+                              />
+                              <button
+                                onClick={() => {
+                                  if (chatMessage.trim()) {
+                                    handleChatWithAI(chatMessage);
+                                    setChatMessage('');
+                                  }
+                                }}
+                                disabled={isGeneratingImport || !chatMessage.trim()}
+                                style={{
+                                  padding: '10px 20px',
+                                  borderRadius: '6px',
+                                  border: 'none',
+                                  background: (isGeneratingImport || !chatMessage.trim())
+                                    ? (theme === 'dark' ? '#444' : '#ccc')
+                                    : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                  color: '#fff',
+                                  cursor: (isGeneratingImport || !chatMessage.trim()) ? 'not-allowed' : 'pointer',
+                                  fontWeight: '600',
+                                  opacity: (isGeneratingImport || !chatMessage.trim()) ? 0.6 : 1
+                                }}
+                              >
+                                {isGeneratingImport ? '...' : 'Send'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="import-modal-footer">
@@ -2310,6 +2806,16 @@ function PageBuilder() {
                     setImportJs('');
                     setWidgetName('Custom Widget');
                     setImportTab('html');
+                    setImportMode('manual');
+                    // Reset AI state
+                    setAiImportDescription('');
+                    setAiImportConversation([]);
+                    setPreviewHtml('');
+                    setPreviewCss('');
+                    setPreviewJs('');
+                    setShowPreview(false);
+                    setIsGeneratingImport(false);
+                    setChatMessage('');
                   }}
                   style={{
                     padding: '10px 20px',
@@ -2323,25 +2829,27 @@ function PageBuilder() {
                 >
                   Cancel
                 </button>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={handleImportWidget}
-                  disabled={!importHtml.trim()}
-                  style={{
-                    padding: '10px 20px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    backgroundColor: !importHtml.trim() 
-                      ? (theme === 'dark' ? '#444' : '#ccc')
-                      : (theme === 'dark' ? '#a855f7' : '#7c3aed'),
-                    color: '#fff',
-                    cursor: !importHtml.trim() ? 'not-allowed' : 'pointer',
-                    fontWeight: '600',
-                    opacity: !importHtml.trim() ? 0.6 : 1
-                  }}
-                >
-                  Import Widget
-                </button>
+                {importMode === 'manual' && (
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={handleImportWidget}
+                    disabled={!importHtml.trim()}
+                    style={{
+                      padding: '10px 20px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: !importHtml.trim() 
+                        ? (theme === 'dark' ? '#444' : '#ccc')
+                        : (theme === 'dark' ? '#a855f7' : '#7c3aed'),
+                      color: '#fff',
+                      cursor: !importHtml.trim() ? 'not-allowed' : 'pointer',
+                      fontWeight: '600',
+                      opacity: !importHtml.trim() ? 0.6 : 1
+                    }}
+                  >
+                    Import Widget
+                  </button>
+                )}
               </div>
             </div>
           </div>
