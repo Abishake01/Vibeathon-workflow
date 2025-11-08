@@ -1,0 +1,26 @@
+[33m736be42[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge branch 'main' into main
+[33mbe781ca[m Merge pull request #4 from Prabhagaran2004/main
+[33m95f4a67[m Merge branch 'main' of https://github.com/Abishake01/work_flow
+[33mcee488c[m node popup
+[33m499280b[m Settings page
+[33m81ad1e5[m Settings
+[33mc9182d5[m Merge pull request #3 from Abishake01/main
+[33mecae39b[m Enhance PageBuilder UI visibility and structure. Updated CSS to ensure critical UI elements remain visible in all states, including fullscreen and loading modes. Refactored panel layouts and headers for improved accessibility and user experience. Adjusted component state management to maintain visibility during interactions.
+[33ma3e1302[m Merge branch 'main' of https://github.com/Abishake01/work_flow
+[33m1551fac[m Merge branch 'NagiPragalathan:main' into main
+[33m3ece89a[m Refactor asset upload permissions and enhance PageBuilder error handling. Updated asset upload views to allow unauthenticated access and modified user directory handling. Improved PageBuilder component with loading and error states, including detailed troubleshooting options. Enhanced GrapesJS configuration for better user experience and added dynamic block content mapping for drag-and-drop functionality.
+[33m4c6df8d[m pogo
+[33mae18a2e[m Merge branch 'main' of https://github.com/Abishake01/work_flow
+[33mc2b6316[m Update frontend styles for improved UI consistency and functionality. Implement white background across various components, enhance header navigation with new tabs, and add auto-save feature for workflow management. Refactor WorkflowBuilder to support undo/redo functionality and improve localStorage handling for saved workflows.
+[33m4fee0a8[m Enhance CSRF protection and media file handling in backend. Added CSRF settings in Django settings, including cookie configurations and trusted origins. Updated URL routing to serve media files in development. Implemented CSRF token retrieval in authentication views and added a new endpoint for CSRF token access. Improved frontend components to handle external scripts and styles dynamically, and enhanced image upload functionality in the widget import modal.
+[33m9598ff7[m Implement user association in MemoryCollection and ExportedWorkflow models. Update serializers to include user field and adjust queryset filtering in views for user-specific access. Enhance memory statistics retrieval based on user authentication.
+[33m6fea1e0[m Enhance user authentication and workflow management features. Updated REST framework settings to require authentication for most endpoints while allowing public access to the AI chat endpoint. Added user associations to Workflow and Credential models, and introduced a new UIBuilderProject model. Implemented user registration and authentication serializers. Refactored frontend routing to include protected routes and integrated authentication context. Updated API service to streamline requests.
+[33m6847c13[m Merge pull request #2 from Abishake01/main
+[33m5f4c657[m Merge branch 'main' of https://github.com/Abishake01/work_flow
+[33m6ca3bf8[m js
+[33m900c2bb[m Remove deprecated files and enhance UI components for the PageBuilder. Deleted unused builder-html.html and note.txt files. Updated CSS for improved styling and responsiveness in PageBuilder and related components. Introduced navigation tabs for better user experience in the workflow and page builders. Added theme toggle functionality to enhance accessibility.
+[33m558ef98[m Merge pull request #1 from Abishake01/main
+[33m7bd819e[m Merge branch 'main' of https://github.com/Abishake01/work_flow
+[33m08cc113[m Added the save and download , import functions added
+[33m54814c9[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31mupstream/HEAD[m[33m)[m Refactor frontend structure and update dependencies. Removed outdated documentation file, added new packages including GrapesJS and React Router, and updated main entry point to use AppRouter for improved routing management.
+[33m9b42246[m first commit
