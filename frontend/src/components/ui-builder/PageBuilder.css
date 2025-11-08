@@ -968,9 +968,8 @@
   height: 28px;
 }
 
-/* AI Edit Toolbar Buttons */
-.ai-edit-toolbar-btn,
-.ai-generate-toolbar-btn {
+/* AI Edit Toolbar Button */
+.ai-edit-toolbar-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -979,7 +978,6 @@
   transition: all 0.2s ease;
 }
 
-.ai-edit-toolbar-btn:hover,
-.ai-generate-toolbar-btn:hover {
+.ai-edit-toolbar-btn:hover {
   background: rgba(102, 126, 234, 0.1);
 }

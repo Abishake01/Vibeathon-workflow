@@ -1367,7 +1367,7 @@ function PageBuilder() {
                         {
                           id: 'ai-edit',
                           label: '',
-                          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>',
+                          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
                           onClick: ({ editor }) => {
                             const selected = editor.getSelected();
                             if (selected) {
@@ -1380,23 +1380,6 @@ function PageBuilder() {
                           },
                           className: 'ai-edit-toolbar-btn',
                           attributes: { 'data-id': 'ai-edit', 'title': 'Edit with AI' }
-                        },
-                        {
-                          id: 'ai-generate',
-                          label: '',
-                          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
-                          onClick: ({ editor }) => {
-                            const selected = editor.getSelected();
-                            if (selected) {
-                              window.dispatchEvent(new CustomEvent('gjs-open-ai-edit', {
-                                detail: { component: selected, mode: 'generate' }
-                              }));
-                            } else {
-                              alert('Please select a component first by clicking on it in the canvas.');
-                            }
-                          },
-                          className: 'ai-generate-toolbar-btn',
-                          attributes: { 'data-id': 'ai-generate', 'title': 'Generate with AI' }
                         },
                         {
                           id: 'save-project',
@@ -1861,13 +1844,9 @@ function PageBuilder() {
                   }
                 };
                 
-                // Register commands first
+                // Register command
                 editor.Commands.add('ai-edit', {
                   run: () => openAIEditModal('edit')
-                });
-                
-                editor.Commands.add('ai-generate', {
-                  run: () => openAIEditModal('generate')
                 });
                 
                 // Create floating AI edit button
@@ -1888,8 +1867,7 @@ function PageBuilder() {
                   btn.title = 'Edit with AI';
                   btn.innerHTML = `
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                     </svg>
                   `;
                   
@@ -2375,17 +2353,8 @@ function PageBuilder() {
             <div className="import-modal-container" onClick={(e) => e.stopPropagation()}>
               <div className="import-modal-header">
                 <h2>
-                  {aiMode === 'edit' ? (
-                    <>
-                      <FiEdit3 style={{ display: 'inline', marginRight: '8px' }} />
-                      Edit with AI
-                    </>
-                  ) : (
-                    <>
-                      <FiZap style={{ display: 'inline', marginRight: '8px' }} />
-                      Generate with AI
-                    </>
-                  )}
+                  <FiZap style={{ display: 'inline', marginRight: '8px' }} />
+                  Edit with AI
                 </h2>
                 <button className="import-modal-close" onClick={() => setShowAIEditModal(false)}>
                   <FiX />
