@@ -96,6 +96,81 @@ function WorkflowBuilder() {
   const [toasts, setToasts] = useState([]);
   const [nodeExecutionStates, setNodeExecutionStates] = useState({});
   const [logsExpanded, setLogsExpanded] = useState(false);
+
+  // Utility function to extract numeric ID from node ID string
+  const extractNodeIdNumber = useCallback((nodeId) => {
+    if (typeof nodeId !== 'string') return 0;
+    const match = nodeId.match(/node_(\d+)/);
+    return match ? parseInt(match[1], 10) : 0;
+  }, []);
+
+  // Utility function to ensure unique node IDs and update counter
+  const ensureUniqueNodeIds = useCallback((nodes, edges = []) => {
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      return { nodes: [], edges: edges || [], idMap: new Map() };
+    }
+
+    // Track used IDs and find max counter value
+    let maxCounter = nodeIdCounter.current;
+
+    // First pass: extract existing IDs and find max
+    nodes.forEach(node => {
+      if (node.id) {
+        const numId = extractNodeIdNumber(node.id);
+        if (numId > maxCounter) {
+          maxCounter = numId;
+        }
+      }
+    });
+
+    // Update counter to be higher than any existing ID
+    nodeIdCounter.current = maxCounter + 1;
+
+    // Second pass: fix any duplicate IDs
+    const idMap = new Map(); // Maps old ID to new ID
+    const seenIds = new Set();
+    const processedNodes = nodes.map((node, index) => {
+      if (!node.id) {
+        // Generate new ID if missing
+        const newId = `node_${++nodeIdCounter.current}`;
+        idMap.set(`missing_${index}`, newId);
+        seenIds.add(newId);
+        return { ...node, id: newId };
+      }
+
+      // Check if this ID was already seen in this batch
+      if (seenIds.has(node.id)) {
+        // This is a duplicate, assign new ID
+        const newId = `node_${++nodeIdCounter.current}`;
+        idMap.set(node.id, newId);
+        seenIds.add(newId);
+        return { ...node, id: newId };
+      }
+
+      // ID is unique in this batch, keep it
+      seenIds.add(node.id);
+      idMap.set(node.id, node.id);
+      return node;
+    });
+
+    // Update edges to use new node IDs if they were changed
+    const processedEdges = (edges || []).map(edge => {
+      const newSource = idMap.get(edge.source) || edge.source;
+      const newTarget = idMap.get(edge.target) || edge.target;
+      
+      if (newSource !== edge.source || newTarget !== edge.target) {
+        return {
+          ...edge,
+          source: newSource,
+          target: newTarget,
+          id: `e${newSource}-${newTarget}-${edge.sourceHandle || 'main'}-${edge.targetHandle || 'main'}`
+        };
+      }
+      return edge;
+    });
+
+    return { nodes: processedNodes, edges: processedEdges, idMap };
+  }, [extractNodeIdNumber]);
   const [aiChatbotOpen, setAiChatbotOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -220,17 +295,8 @@ function WorkflowBuilder() {
         edgesCount: (workflow.edges || []).length 
       });
       
-      const loadedNodes = workflow.nodes.map(node => {
-        // Restore properties to localStorage
-        if (node.data && node.data.properties && Object.keys(node.data.properties).length > 0) {
-          try {
-            localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
-            console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
-          } catch (error) {
-            console.error(`Error saving to localStorage for node ${node.id}:`, error);
-          }
-        }
-        
+      // Process nodes and ensure unique IDs
+      const processedNodes = workflow.nodes.map(node => {
         return {
           id: node.id,
           type: node.type,
@@ -248,14 +314,47 @@ function WorkflowBuilder() {
           }
         };
       });
+
+      // Ensure unique node IDs and update edges accordingly
+      const { nodes: uniqueNodes, edges: updatedEdges, idMap } = ensureUniqueNodeIds(processedNodes, workflow.edges || []);
       
-      setNodes(loadedNodes);
-      setEdges(workflow.edges || []);
+      // Update localStorage keys for properties if IDs changed
+      uniqueNodes.forEach((node, index) => {
+        const originalNode = processedNodes[index];
+        if (originalNode && originalNode.id !== node.id && originalNode.data?.properties) {
+          // Move properties to new ID
+          try {
+            const oldKey = `inputValues_${originalNode.id}`;
+            const newKey = `inputValues_${node.id}`;
+            const oldProperties = localStorage.getItem(oldKey);
+            if (oldProperties) {
+              localStorage.setItem(newKey, oldProperties);
+              localStorage.removeItem(oldKey);
+            }
+            // Also check if properties are in node.data
+            if (originalNode.data.properties && Object.keys(originalNode.data.properties).length > 0) {
+              localStorage.setItem(newKey, JSON.stringify(originalNode.data.properties));
+            }
+          } catch (error) {
+            console.error(`Error updating localStorage for node ${originalNode.id} -> ${node.id}:`, error);
+          }
+        } else if (node.data?.properties && Object.keys(node.data.properties).length > 0) {
+          // Save properties with current ID
+          try {
+            localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
+          } catch (error) {
+            console.error(`Error saving to localStorage for node ${node.id}:`, error);
+          }
+        }
+      });
+      
+      setNodes(uniqueNodes);
+      setEdges(updatedEdges);
       setIsSaved(true);
       hasLoadedWorkflow.current = false; // Mark as processed to prevent re-loading
       console.log('✅ Restored workflow from localStorage:', { 
-        nodes: loadedNodes.length, 
-        edges: (workflow.edges || []).length 
+        nodes: uniqueNodes.length, 
+        edges: updatedEdges.length 
       });
     } catch (error) {
       console.error('❌ Error processing saved workflow:', error);
@@ -526,7 +625,7 @@ function WorkflowBuilder() {
     setExecutingNodes(new Set([nodeId]));
 
     try {
-      const response = await fetch(`/api/workflows/workflows/${currentWorkflowId}/execute_node/`, {
+      const response = await fetch(`/api/workflows/${currentWorkflowId}/execute_node/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -586,10 +685,45 @@ function WorkflowBuilder() {
   const handleExecutionClick = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
     
+    if (!node) {
+      console.error('❌ Node not found:', nodeId);
+      showToast('Node not found', 'error', 2000);
+      return;
+    }
+    
     // For chat nodes, open chat UI
     if (node?.data?.type === 'when-chat-received') {
       setChatOpen(true);
       return;
+    }
+    
+    // Execute single node - create workflow if not saved
+    if (!currentWorkflowId) {
+      console.log('⚠️ No workflow ID, creating workflow first...');
+      try {
+        const enhancedNodes = loadNodesWithProperties(nodes);
+        const createResponse = await fetch('/api/workflows/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: workflowName || 'Untitled Workflow',
+            nodes: enhancedNodes,
+            edges: edges
+          })
+        });
+        
+        if (createResponse.ok) {
+          const created = await createResponse.json();
+          setCurrentWorkflowId(created.id);
+          console.log('✅ Created workflow:', created.id);
+        } else {
+          throw new Error('Failed to create workflow');
+        }
+      } catch (error) {
+        console.error('Error creating workflow:', error);
+        showToast('Failed to create workflow. Please save the workflow first.', 'error', 3000);
+        return;
+      }
     }
     
     // Execute single node if workflow is saved
@@ -633,7 +767,7 @@ function WorkflowBuilder() {
         }
         
         // Update workflow with current node properties
-        const updateResponse = await fetch(`/api/workflows/workflows/${currentWorkflowId}/`, {
+        const updateResponse = await fetch(`/api/workflows/${currentWorkflowId}/`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -650,7 +784,7 @@ function WorkflowBuilder() {
         await new Promise(resolve => setTimeout(resolve, 100));
         
         // Execute the single node with default trigger data if needed
-        const response = await fetch(`/api/workflows/workflows/${currentWorkflowId}/execute_node/`, {
+        const response = await fetch(`/api/workflows/${currentWorkflowId}/execute_node/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -714,6 +848,28 @@ function WorkflowBuilder() {
             };
           }
           
+          // Also check node_results if available
+          if (result.execution?.node_results) {
+            Object.entries(result.execution.node_results).forEach(([nId, nResult]) => {
+              if (!executionData.node_states[nId]) {
+                executionData.node_states[nId] = {
+                  status: 'completed',
+                  output: nResult
+                };
+              } else if (!executionData.node_states[nId].output) {
+                executionData.node_states[nId].output = nResult;
+              }
+            });
+            // Also store node_results separately for easier access
+            if (!executionData.node_results) {
+              executionData.node_results = {};
+            }
+            executionData.node_results = {
+              ...executionData.node_results,
+              ...result.execution.node_results
+            };
+          }
+          
           if (result.execution?.execution_order) {
             // Merge execution order, keeping unique nodes
             const existingOrder = executionData.execution_order || [];
@@ -729,9 +885,13 @@ function WorkflowBuilder() {
             console.log('💾 Stored single node execution data in localStorage:', {
               nodeId,
               nodeStates: Object.keys(executionData.node_states),
-              executionOrder: executionData.execution_order
+              nodeResults: Object.keys(executionData.node_results || {}),
+              executionOrder: executionData.execution_order,
+              currentNodeState: executionData.node_states[nodeId],
+              currentNodeResult: executionData.node_results?.[nodeId],
+              currentNodeStateOutput: executionData.node_states[nodeId]?.output
             });
-            // Dispatch custom event to notify VariablesPanel
+            // Dispatch custom event to notify VariablesPanel and NodeSettingsModal
             window.dispatchEvent(new Event('workflowExecutionUpdate'));
           } catch (error) {
             console.error('Error storing execution data:', error);
@@ -838,8 +998,45 @@ function WorkflowBuilder() {
         console.log('🔍 Executing test for node:', {
           id: nodeId,
           type: node.data.type,
-          properties: Object.keys(nodeProperties)
+          properties: Object.keys(nodeProperties),
+          hasApiKey: !!(nodeProperties.api_key || nodeProperties.apiKey)
         });
+        
+        // Validate API key for chat model nodes
+        if (node.data.type?.includes('groq') || node.data.type?.includes('openai') || node.data.type?.includes('anthropic')) {
+          const apiKey = nodeProperties.api_key || nodeProperties.apiKey;
+          if (!apiKey || apiKey.trim().length < 10) {
+            const endTime = new Date();
+            const errorMessage = 'API key is required. Please configure it in the node settings.';
+            
+            setNodes((nds) =>
+              nds.map((n) =>
+                n.id === nodeId
+                  ? {
+                      ...n,
+                      data: {
+                        ...n.data,
+                        executionState: {
+                          status: 'error',
+                          output: `❌ ${errorMessage}`,
+                          startTime,
+                          endTime
+                        }
+                      }
+                    }
+                  : n
+              )
+            );
+            
+            showToast(`❌ ${errorMessage}`, 'error', 4000);
+            setExecutingNodes(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(nodeId);
+              return newSet;
+            });
+            return;
+          }
+        }
         
         const testWorkflow = {
           nodes: [
@@ -915,9 +1112,31 @@ function WorkflowBuilder() {
           
           // Check if the workflow execution failed
           if (result.status === 'error' || result.error) {
-            const errorMessage = result.error || 'Workflow execution failed';
+            // Try to get detailed error from node states first
+            let errorMessage = result.error || 'Workflow execution failed';
             
-            console.log('❌ Workflow execution failed:', errorMessage);
+            // Check node states for more specific error
+            if (result.execution?.node_states?.[nodeId]) {
+              const nodeState = result.execution.node_states[nodeId];
+              if (nodeState.error) {
+                errorMessage = nodeState.error;
+              } else if (nodeState.status === 'error') {
+                errorMessage = nodeState.output?.error || nodeState.output || errorMessage;
+              }
+            }
+            
+            // Check execution details for more context
+            if (result.execution?.error) {
+              errorMessage = result.execution.error;
+            }
+            
+            console.log('❌ Workflow execution failed:', {
+              status: result.status,
+              error: result.error,
+              executionError: result.execution?.error,
+              nodeState: result.execution?.node_states?.[nodeId],
+              fullResult: result
+            });
             
             const nodeExecution = {
               id: Date.now() + Math.random(),
@@ -953,7 +1172,7 @@ function WorkflowBuilder() {
             
             // Add to execution history
             setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
-            showToast(`❌ ${node.data.label} test failed: ${errorMessage}`, 'error', 4000);
+            showToast(`❌ ${node.data.label} test failed: ${errorMessage}`, 'error', 5000);
           }
           // Check if the specific node execution failed
           else if (nodeResult?.status === 'error' || nodeResult?.error) {
@@ -1067,10 +1286,32 @@ function WorkflowBuilder() {
             console.warn('Failed to cleanup test workflow:', cleanupError);
           }
         } else {
-          throw new Error(`Execution failed: ${response.status}`);
+          // Try to get error details from response
+          let errorMessage = `Execution failed: ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+            console.error('❌ Backend error response:', errorData);
+          } catch (parseError) {
+            // If response is not JSON, try to get text
+            try {
+              const errorText = await response.text();
+              if (errorText) {
+                errorMessage = errorText.substring(0, 200); // Limit length
+              }
+            } catch (textError) {
+              console.error('Could not parse error response:', textError);
+            }
+          }
+          throw new Error(errorMessage);
         }
       } catch (error) {
-        console.error('Node execution failed:', error);
+        console.error('❌ Node execution failed:', {
+          error: error.message,
+          stack: error.stack,
+          nodeId,
+          nodeType: node.data.type
+        });
         const endTime = new Date();
         
         const nodeExecution = {
@@ -1081,12 +1322,32 @@ function WorkflowBuilder() {
           startTime,
           endTime,
           source: 'test',
-          output: `Execution failed: ${error.message}`,
+          output: `❌ ${error.message || 'Execution failed'}`,
           duration: endTime - startTime
         };
         
+        // Update node execution state to show error
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === nodeId
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    executionState: {
+                      status: 'error',
+                      output: `❌ ${error.message || 'Execution failed'}`,
+                      startTime,
+                      endTime
+                    }
+                  }
+                }
+              : n
+          )
+        );
+        
         setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
-        showToast(`❌ Test execution failed: ${error.message}`, 'error', 4000);
+        showToast(`❌ ${node.data.label} test failed: ${error.message || 'Execution failed'}`, 'error', 5000);
       } finally {
         // Clear loading state
         setExecutingNodes(prev => {
@@ -1630,6 +1891,26 @@ function WorkflowBuilder() {
     );
   }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
 
+  // Validate node IDs for duplicates (development only - logging)
+  useEffect(() => {
+    if (nodes.length === 0) return;
+
+    // Check for duplicate IDs
+    const idCounts = new Map();
+    nodes.forEach(node => {
+      if (node.id) {
+        idCounts.set(node.id, (idCounts.get(node.id) || 0) + 1);
+      }
+    });
+
+    const duplicates = Array.from(idCounts.entries()).filter(([_, count]) => count > 1);
+    
+    if (duplicates.length > 0 && process.env.NODE_ENV === 'development') {
+      console.warn('⚠️ Found duplicate node IDs (this should be fixed automatically):', duplicates.map(([id]) => id));
+      console.warn('⚠️ This may cause React key warnings. Duplicates should be fixed on load/import.');
+    }
+  }, [nodes.length]); // Only check when node count changes
+
   const onDragOver = useCallback((event) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -1884,6 +2165,7 @@ function WorkflowBuilder() {
             workflow_id: workflowId || currentWorkflowId || 'local',
             execution_id: result.execution_id || Date.now().toString(),
             node_states: nodeStates,
+            node_results: result.execution?.node_results || {},
             execution_order: result.execution.execution_order || Object.keys(nodeStates),
             timestamp: new Date().toISOString()
           };
@@ -1893,9 +2175,10 @@ function WorkflowBuilder() {
             console.log('💾 Stored execution data in localStorage:', {
               workflow_id: executionData.workflow_id,
               node_count: Object.keys(nodeStates).length,
-              execution_order: executionData.execution_order
+              execution_order: executionData.execution_order,
+              node_results_keys: Object.keys(executionData.node_results || {})
             });
-            // Dispatch custom event to notify VariablesPanel
+            // Dispatch custom event to notify VariablesPanel and NodeSettingsModal
             window.dispatchEvent(new Event('workflowExecutionUpdate'));
           } catch (error) {
             console.error('Error storing execution data:', error);
@@ -2227,16 +2510,6 @@ function WorkflowBuilder() {
 
         // Process imported nodes
         const processedNodes = importedNodes.map(node => {
-          // Restore properties to localStorage
-          if (node.data.properties && Object.keys(node.data.properties).length > 0) {
-            try {
-              localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
-              console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
-            } catch (error) {
-              console.error(`Error saving to localStorage for node ${node.id}:`, error);
-            }
-          }
-
           return {
             ...node,
             data: {
@@ -2251,22 +2524,56 @@ function WorkflowBuilder() {
           };
         });
 
-        // Process imported edges
-        const processedEdges = (importedEdges || []).map(edge => ({
+        // Ensure unique node IDs and update edges accordingly
+        const { nodes: uniqueNodes, edges: updatedEdges, idMap } = ensureUniqueNodeIds(processedNodes, importedEdges || []);
+        
+        // Update localStorage keys for properties if IDs changed
+        uniqueNodes.forEach((node, index) => {
+          const originalNode = processedNodes[index];
+          if (originalNode && originalNode.id !== node.id && originalNode.data?.properties) {
+            // Move properties to new ID
+            try {
+              const oldKey = `inputValues_${originalNode.id}`;
+              const newKey = `inputValues_${node.id}`;
+              const oldProperties = localStorage.getItem(oldKey);
+              if (oldProperties) {
+                localStorage.setItem(newKey, oldProperties);
+                localStorage.removeItem(oldKey);
+              }
+              // Also check if properties are in node.data
+              if (originalNode.data.properties && Object.keys(originalNode.data.properties).length > 0) {
+                localStorage.setItem(newKey, JSON.stringify(originalNode.data.properties));
+              }
+            } catch (error) {
+              console.error(`Error updating localStorage for node ${originalNode.id} -> ${node.id}:`, error);
+            }
+          } else if (node.data?.properties && Object.keys(node.data.properties).length > 0) {
+            // Save properties with current ID
+            try {
+              localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
+              console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
+            } catch (error) {
+              console.error(`Error saving to localStorage for node ${node.id}:`, error);
+            }
+          }
+        });
+
+        // Update edge IDs to include sourceHandle and targetHandle
+        const finalEdges = updatedEdges.map(edge => ({
           ...edge,
           id: edge.id || `e${edge.source}-${edge.target}-${edge.sourceHandle || 'main'}-${edge.targetHandle || 'main'}`,
           sourceHandle: edge.sourceHandle || 'main',
           targetHandle: edge.targetHandle || 'main'
         }));
 
-        setNodes(processedNodes);
-        setEdges(processedEdges);
+        setNodes(uniqueNodes);
+        setEdges(finalEdges);
         
         showToast('✅ Workflow imported successfully!', 'success');
         console.log('📂 Imported workflow:', {
-          nodes: processedNodes.length,
-          edges: processedEdges.length,
-          properties: processedNodes.map(n => Object.keys(n.data.properties || {}))
+          nodes: uniqueNodes.length,
+          edges: finalEdges.length,
+          properties: uniqueNodes.map(n => Object.keys(n.data.properties || {}))
         });
 
       } else if (importType === 'server') {
@@ -2309,16 +2616,6 @@ function WorkflowBuilder() {
             console.warn(`⚠️ Node ${node.id} missing data property, creating default`);
             node.data = { type: 'unknown', label: 'Unknown Node', properties: {} };
           }
-          
-          // Restore properties to localStorage
-          if (node.data.properties && Object.keys(node.data.properties).length > 0) {
-            try {
-              localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
-              console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
-            } catch (error) {
-              console.error(`Error saving to localStorage for node ${node.id}:`, error);
-            }
-          }
 
           return {
             ...node,
@@ -2334,22 +2631,56 @@ function WorkflowBuilder() {
           };
         });
 
-        // Process server edges
-        const processedEdges = (serverEdges || []).map(edge => ({
+        // Ensure unique node IDs and update edges accordingly
+        const { nodes: uniqueNodes, edges: updatedEdges, idMap } = ensureUniqueNodeIds(processedNodes, serverEdges || []);
+        
+        // Update localStorage keys for properties if IDs changed
+        uniqueNodes.forEach((node, index) => {
+          const originalNode = processedNodes[index];
+          if (originalNode && originalNode.id !== node.id && originalNode.data?.properties) {
+            // Move properties to new ID
+            try {
+              const oldKey = `inputValues_${originalNode.id}`;
+              const newKey = `inputValues_${node.id}`;
+              const oldProperties = localStorage.getItem(oldKey);
+              if (oldProperties) {
+                localStorage.setItem(newKey, oldProperties);
+                localStorage.removeItem(oldKey);
+              }
+              // Also check if properties are in node.data
+              if (originalNode.data.properties && Object.keys(originalNode.data.properties).length > 0) {
+                localStorage.setItem(newKey, JSON.stringify(originalNode.data.properties));
+              }
+            } catch (error) {
+              console.error(`Error updating localStorage for node ${originalNode.id} -> ${node.id}:`, error);
+            }
+          } else if (node.data?.properties && Object.keys(node.data.properties).length > 0) {
+            // Save properties with current ID
+            try {
+              localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
+              console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
+            } catch (error) {
+              console.error(`Error saving to localStorage for node ${node.id}:`, error);
+            }
+          }
+        });
+
+        // Update edge IDs to include sourceHandle and targetHandle
+        const finalEdges = updatedEdges.map(edge => ({
           ...edge,
           id: edge.id || `e${edge.source}-${edge.target}-${edge.sourceHandle || 'main'}-${edge.targetHandle || 'main'}`,
           sourceHandle: edge.sourceHandle || 'main',
           targetHandle: edge.targetHandle || 'main'
         }));
 
-        setNodes(processedNodes);
-        setEdges(processedEdges);
+        setNodes(uniqueNodes);
+        setEdges(finalEdges);
         
         showToast('✅ Exported workflow imported successfully!', 'success');
         console.log('📂 Imported exported workflow:', {
-          nodes: processedNodes.length,
-          edges: processedEdges.length,
-          properties: processedNodes.map(n => Object.keys(n.data.properties || {}))
+          nodes: uniqueNodes.length,
+          edges: finalEdges.length,
+          properties: uniqueNodes.map(n => Object.keys(n.data.properties || {}))
         });
       }
     } catch (error) {
@@ -2431,17 +2762,7 @@ function WorkflowBuilder() {
       reader.onload = (event) => {
         try {
           const workflow = JSON.parse(event.target.result);
-          const loadedNodes = (workflow.nodes || []).map(node => {
-            // Restore properties to localStorage
-            if (node.data.properties && Object.keys(node.data.properties).length > 0) {
-              try {
-                localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
-                console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
-              } catch (error) {
-                console.error(`Error saving to localStorage for node ${node.id}:`, error);
-              }
-            }
-            
+          const processedNodes = (workflow.nodes || []).map(node => {
             return {
               ...node,
               data: {
@@ -2455,12 +2776,46 @@ function WorkflowBuilder() {
               }
             };
           });
+
+          // Ensure unique node IDs and update edges accordingly
+          const { nodes: uniqueNodes, edges: updatedEdges, idMap } = ensureUniqueNodeIds(processedNodes, workflow.edges || []);
           
-          setNodes(loadedNodes);
-          setEdges(workflow.edges || []);
+          // Update localStorage keys for properties if IDs changed
+          uniqueNodes.forEach((node, index) => {
+            const originalNode = processedNodes[index];
+            if (originalNode && originalNode.id !== node.id && originalNode.data?.properties) {
+              // Move properties to new ID
+              try {
+                const oldKey = `inputValues_${originalNode.id}`;
+                const newKey = `inputValues_${node.id}`;
+                const oldProperties = localStorage.getItem(oldKey);
+                if (oldProperties) {
+                  localStorage.setItem(newKey, oldProperties);
+                  localStorage.removeItem(oldKey);
+                }
+                // Also check if properties are in node.data
+                if (originalNode.data.properties && Object.keys(originalNode.data.properties).length > 0) {
+                  localStorage.setItem(newKey, JSON.stringify(originalNode.data.properties));
+                }
+              } catch (error) {
+                console.error(`Error updating localStorage for node ${originalNode.id} -> ${node.id}:`, error);
+              }
+            } else if (node.data?.properties && Object.keys(node.data.properties).length > 0) {
+              // Save properties with current ID
+              try {
+                localStorage.setItem(`inputValues_${node.id}`, JSON.stringify(node.data.properties));
+                console.log(`📥 Restored properties for node ${node.id}:`, Object.keys(node.data.properties));
+              } catch (error) {
+                console.error(`Error saving to localStorage for node ${node.id}:`, error);
+              }
+            }
+          });
+          
+          setNodes(uniqueNodes);
+          setEdges(updatedEdges);
           setSelectedNodeForSettings(null);
           
-          console.log('📂 Loaded workflow with properties:', loadedNodes.map(n => ({
+          console.log('📂 Loaded workflow with properties:', uniqueNodes.map(n => ({
             id: n.id,
             type: n.data.type,
             properties: Object.keys(n.data.properties || {})

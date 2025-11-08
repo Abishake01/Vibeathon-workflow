@@ -62,6 +62,46 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
     },
   };
 
+  // Get API key from connected nodes (like Groq Llama/Gemma)
+  const getApiKeyFromConnectedNodes = useMemo(() => {
+    if (!node?.id || !edges || !nodes) return null;
+    
+    // Find edges connected to this node's chat_model input
+    const connectedEdges = edges.filter(edge => 
+      edge.target === node.id && 
+      (edge.targetHandle === 'chat_model' || edge.targetHandle === 'chatModel')
+    );
+    
+    // Check each connected node for API key
+    for (const edge of connectedEdges) {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      if (sourceNode) {
+        // Check if source node has api_key property
+        const apiKey = sourceNode.data?.properties?.api_key;
+        if (apiKey) {
+          return apiKey;
+        }
+      }
+    }
+    
+    return null;
+  }, [node?.id, edges, nodes]);
+
+  // Auto-populate API key from connected nodes when available
+  useEffect(() => {
+    if (!node?.id || node.data?.type !== 'ai-agent') return;
+    
+    const connectedApiKey = getApiKeyFromConnectedNodes;
+    if (connectedApiKey) {
+      // Always update if connected node has API key (user can still override)
+      const currentApiKey = properties.api_key || inputValues.api_key || '';
+      if (currentApiKey !== connectedApiKey) {
+        console.log('🔑 Auto-populating API key from connected node:', connectedApiKey.substring(0, 10) + '...');
+        handleApiKeyChange('api_key', connectedApiKey);
+      }
+    }
+  }, [getApiKeyFromConnectedNodes, node?.id, properties.api_key, inputValues.api_key]);
+
   // Load node output from localStorage when node changes
   useEffect(() => {
     if (!node?.id) {
@@ -75,18 +115,106 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
         if (storedData) {
           const executionData = JSON.parse(storedData);
           const nodeState = executionData.node_states?.[node.id];
+          const nodeResult = executionData.node_results?.[node.id];
           
-          if (nodeState && nodeState.output) {
-            let output = nodeState.output;
-            // Extract main data if it's structured
-            if (typeof output === 'object' && 'main' in output) {
-              output = output.main;
+          // Try to get output from node_states first, then node_results
+          let output = null;
+          if (nodeState) {
+            // Check various possible output locations
+            // nodeState.output should contain the actual result
+            output = nodeState.output || nodeState.result || nodeState.content;
+            
+            // If output is still null, check if nodeState itself is the output
+            if (!output && nodeState && typeof nodeState === 'object') {
+              // Don't use nodeState directly if it has status/timestamp fields (it's metadata)
+              if (!('status' in nodeState && 'timestamp' in nodeState)) {
+                output = nodeState;
+              }
             }
-            setNodeOutput(output);
+            
+            // If output is an object with nested structure, try to extract meaningful data
+            if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
+              // If it has a 'main' key, use that
+              if ('main' in output) {
+                const mainData = output.main;
+                // If main is an object, try to extract text/content
+                if (typeof mainData === 'object' && mainData !== null) {
+                  output = mainData.text || mainData.content || mainData.message || mainData;
+                } else {
+                  output = mainData;
+                }
+              }
+              // If it has 'content' key, use that
+              else if ('content' in output) {
+                output = output.content;
+              }
+              // If it has 'text' key, use that
+              else if ('text' in output) {
+                output = output.text;
+              }
+              // If it has 'message' key, use that
+              else if ('message' in output) {
+                output = output.message;
+              }
+              // If it's an object but we haven't found a key, use the whole object
+              else if (Object.keys(output).length > 0) {
+                // Keep the object as-is, it will be displayed in JSON view
+                output = output;
+              }
+            }
+          } else if (nodeResult) {
+            output = nodeResult;
+            // Same extraction logic for nodeResult
+            if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
+              if ('main' in output) {
+                const mainData = output.main;
+                if (typeof mainData === 'object' && mainData !== null) {
+                  output = mainData.text || mainData.content || mainData.message || mainData;
+                } else {
+                  output = mainData;
+                }
+              } else if ('content' in output) {
+                output = output.content;
+              } else if ('text' in output) {
+                output = output.text;
+              } else if ('message' in output) {
+                output = output.message;
+              }
+            }
+          }
+          
+          if (output !== null && output !== undefined) {
+            // Handle string outputs
+            if (typeof output === 'string') {
+              if (output.trim() !== '') {
+                console.log('✅ Setting node output (string):', output.substring(0, 100) + '...');
+                setNodeOutput(output);
+              } else {
+                console.log('⚠️ Output is empty string');
+                setNodeOutput(null);
+              }
+            } 
+            // Handle object/array outputs
+            else if (typeof output === 'object') {
+              // Even if object is empty, set it so it can be displayed
+              console.log('✅ Setting node output (object):', Array.isArray(output) ? `Array[${output.length}]` : Object.keys(output));
+              setNodeOutput(output);
+            }
+            // Handle other types (number, boolean, etc.)
+            else {
+              console.log('✅ Setting node output (other):', output);
+              setNodeOutput(output);
+            }
           } else {
+            console.log('⚠️ No output found for node:', node.id);
+            console.log('⚠️ Available node states:', Object.keys(executionData.node_states || {}));
+            console.log('⚠️ Available node results:', Object.keys(executionData.node_results || {}));
+            console.log('⚠️ Full nodeState:', JSON.stringify(nodeState, null, 2));
+            console.log('⚠️ Full nodeResult:', JSON.stringify(nodeResult, null, 2));
             setNodeOutput(null);
           }
         } else {
+          console.log('⚠️ No execution data in localStorage');
           setNodeOutput(null);
         }
       } catch (error) {
@@ -99,7 +227,11 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
 
     // Listen for execution updates
     const handleExecutionUpdate = () => {
-      loadNodeOutput();
+      console.log('🔄 Execution update event received, reloading output...');
+      // Add a small delay to ensure localStorage is updated
+      setTimeout(() => {
+        loadNodeOutput();
+      }, 100);
     };
 
     window.addEventListener('workflowExecutionUpdate', handleExecutionUpdate);
@@ -453,8 +585,21 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
         const isApiKey = propKey.includes("api_key") || propKey.includes("key");
         const validationState = validationStates[propKey];
         const isTesting = testingKeys[propKey];
+        const connectedApiKey = node.data?.type === 'ai-agent' && propKey === 'api_key' ? getApiKeyFromConnectedNodes : null;
+        const showConnectedKeyHint = connectedApiKey && value === connectedApiKey;
+        
   return (
           <div className="api-key-input-container">
+            {showConnectedKeyHint && (
+              <div className="api-key-source-hint" style={{ 
+                fontSize: '11px', 
+                color: 'var(--textSecondary)', 
+                marginBottom: '4px',
+                fontStyle: 'italic'
+              }}>
+                ✓ Using API key from connected chat model
+              </div>
+            )}
             <div className="api-key-input-wrapper">
               <input
                 type={isApiKey && !showApiKey[propKey] ? "password" : "text"}
@@ -831,29 +976,88 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
   const handleExecuteClick = async () => {
     if (onExecute && node?.id) {
       setIsExecuting(true);
+      setNodeOutput(null); // Clear previous output
       try {
+        console.log('🚀 Executing node from NodeSettingsModal:', node.id);
         await onExecute(node.id);
-        // Wait a bit for the execution to complete and data to be stored
-        setTimeout(() => {
-          // Reload output after execution
+        
+        // Wait for execution to complete and data to be stored
+        // Use a longer timeout and check multiple times
+        let attempts = 0;
+        const maxAttempts = 20; // 10 seconds total (20 * 500ms)
+        
+        const checkForOutput = () => {
+          attempts++;
           const storedData = localStorage.getItem('workflow_execution_data');
           if (storedData) {
-            const executionData = JSON.parse(storedData);
-            const nodeState = executionData.node_states?.[node.id];
-            if (nodeState && nodeState.output) {
-              let output = nodeState.output;
-              if (typeof output === 'object' && 'main' in output) {
-                output = output.main;
+            try {
+              const executionData = JSON.parse(storedData);
+              const nodeState = executionData.node_states?.[node.id];
+              const nodeResult = executionData.node_results?.[node.id];
+              
+              console.log(`🔍 Attempt ${attempts}: Checking for output...`, {
+                nodeId: node.id,
+                hasNodeState: !!nodeState,
+                hasNodeResult: !!nodeResult,
+                nodeStateOutput: nodeState?.output,
+                nodeResult: nodeResult
+              });
+              
+              // Try to get output from node_states or node_results
+              let output = null;
+              if (nodeState) {
+                output = nodeState.output || nodeState.result || nodeState;
+              } else if (nodeResult) {
+                output = nodeResult;
               }
-              setNodeOutput(output);
+              
+              // Extract main data if it's structured (same logic as loadNodeOutput)
+              if (output && typeof output === 'object' && !Array.isArray(output)) {
+                if ('main' in output) {
+                  const mainData = output.main;
+                  if (typeof mainData === 'object' && mainData !== null) {
+                    output = mainData.text || mainData.content || mainData.message || mainData;
+                  } else {
+                    output = mainData;
+                  }
+                } else if ('content' in output) {
+                  output = output.content;
+                } else if ('text' in output) {
+                  output = output.text;
+                } else if ('message' in output) {
+                  output = output.message;
+                }
+              }
+              
+              if (output !== null && output !== undefined) {
+                setNodeOutput(output);
+                setIsExecuting(false);
+                console.log('✅ Node output loaded and set:', output);
+                return;
+              }
+            } catch (error) {
+              console.error('Error parsing execution data:', error);
             }
           }
-          setIsExecuting(false);
-        }, 500);
+          
+          // If no output yet and haven't exceeded max attempts, check again
+          if (attempts < maxAttempts) {
+            setTimeout(checkForOutput, 500);
+          } else {
+            console.warn('⏱️ Timeout waiting for node output after', maxAttempts, 'attempts');
+            console.warn('⏱️ Final localStorage data:', localStorage.getItem('workflow_execution_data'));
+            setIsExecuting(false);
+          }
+        };
+        
+        // Start checking after initial delay
+        setTimeout(checkForOutput, 500);
       } catch (error) {
         console.error('Execution error:', error);
         setIsExecuting(false);
       }
+    } else {
+      console.warn('⚠️ Cannot execute: onExecute or node.id missing', { onExecute: !!onExecute, nodeId: node?.id });
     }
   };
 
@@ -930,8 +1134,21 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
               </div>
             </div>
             <div className="node-actions-header">
-              <button className="execute-button" onClick={handleExecuteClick}>
-                <FiPlay /> Execute step
+              <button 
+                className={`execute-button ${isExecuting ? 'executing' : ''}`}
+                onClick={handleExecuteClick}
+                disabled={isExecuting}
+              >
+                {isExecuting ? (
+                  <>
+                    <span className="spinner" style={{ display: 'inline-block', width: '14px', height: '14px', marginRight: '6px' }}></span>
+                    Executing...
+                  </>
+                ) : (
+                  <>
+                    <FiPlay /> Execute step
+                  </>
+                )}
               </button>
               <a href="#" className="docs-link">
                 Docs
@@ -1484,6 +1701,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           z-index: 1000;
           color: var(--text);
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          height: 100vh;
+          width: 100vw;
+          overflow: hidden;
         }
 
         /* Left Panel */
@@ -1496,6 +1716,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           width: 100%;
           height: 100%;
           min-width: 0;
+          max-height: 100vh;
         }
 
         .panel-header {
@@ -1529,6 +1750,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           background: var(--background);
           width: 100%;
           min-width: 0;
+          min-height: 0;
+          max-height: 100%;
           box-sizing: border-box;
         }
 
@@ -1587,6 +1810,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           width: 100%;
           height: 100%;
           min-width: 0;
+          max-height: 100vh;
           box-sizing: border-box;
           display: flex;
           flex-direction: column;
@@ -1605,6 +1829,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           display: flex;
           flex-direction: column;
           min-width: 0;
+          min-height: 0;
+          flex: 1;
         }
 
         .node-config-header {
@@ -1749,6 +1975,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           max-width: 100%;
           box-sizing: border-box;
           min-width: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+          flex: 1;
+          min-height: 0;
         }
 
         .tip-box {
@@ -2035,11 +2265,13 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
         .settings-content {
           padding: 24px;
           background: var(--background);
-          height: calc(100vh - 160px);
-          min-height: 600px;
           overflow-y: auto;
+          overflow-x: hidden;
           display: flex;
           flex-direction: column;
+          flex: 1;
+          min-height: 0;
+          max-height: 100%;
         }
 
         .settings-section {
@@ -2206,6 +2438,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           overflow: hidden;
           width: 100%;
           height: 100%;
+          max-height: 100vh;
           min-width: 0;
         }
 

@@ -89,12 +89,12 @@ const ResizablePanels = ({ children, initialSizes = [280, 1, 400], minSizes = [2
       <div 
         className="resizable-panel" 
         style={{ 
-          overflow: 'hidden',
           width: '100%',
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
-          minWidth: 0
+          minWidth: 0,
+          overflow: 'hidden'
         }}
       >
         {children[0]}
@@ -127,12 +127,12 @@ const ResizablePanels = ({ children, initialSizes = [280, 1, 400], minSizes = [2
       <div 
         className="resizable-panel" 
         style={{ 
-          overflow: 'hidden',
           width: '100%',
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
-          minWidth: 0
+          minWidth: 0,
+          overflow: 'hidden'
         }}
       >
         {children[1]}
@@ -165,12 +165,12 @@ const ResizablePanels = ({ children, initialSizes = [280, 1, 400], minSizes = [2
       <div 
         className="resizable-panel" 
         style={{ 
-          overflow: 'hidden',
           width: '100%',
           height: '100%',
           display: 'flex',
           flexDirection: 'column',
-          minWidth: 0
+          minWidth: 0,
+          overflow: 'hidden'
         }}
       >
         {children[2]}

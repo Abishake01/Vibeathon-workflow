@@ -155,11 +155,36 @@ class AINodeExecutor(BaseNodeExecutor):
             # Get properties
             system_prompt = self.get_property('prompt', '# AI Agent System Prompt\n\nYou are a helpful AI assistant.')
             
-            # Get model from chat-model input or use default
-            model = chat_model_input.get('model', 'gpt-4-turbo') if chat_model_input else 'gpt-4-turbo'
-            temperature = chat_model_input.get('temperature', 0.7) if chat_model_input else 0.7
-            max_tokens = chat_model_input.get('max_tokens', 1024) if chat_model_input else 1024
-            base_url = chat_model_input.get('base_url') if chat_model_input else None
+            # Get model from chat-model input, node properties, or use default
+            model = None
+            if chat_model_input and 'model' in chat_model_input:
+                model = chat_model_input['model']
+            else:
+                # Check node properties for model
+                model = self.get_property('model', '')
+                if not model:
+                    # Try to detect model from API key type if available
+                    node_api_key = self.get_property('api_key', '')
+                    if node_api_key:
+                        if node_api_key.startswith('gsk_'):
+                            # Groq API key detected
+                            model = 'llama-3.1-8b-instant'
+                        elif node_api_key.startswith('sk-ant-'):
+                            # Anthropic API key detected
+                            model = 'claude-3-sonnet'
+                        elif not node_api_key.startswith('sk-') or len(node_api_key) < 30:
+                            # Google API key (doesn't start with sk- or is short)
+                            model = 'gemini-pro'
+                        else:
+                            # Default to OpenAI
+                            model = 'gpt-4-turbo'
+                    else:
+                        # Default to OpenAI
+                        model = 'gpt-4-turbo'
+            
+            temperature = chat_model_input.get('temperature', 0.7) if chat_model_input else self.get_property('temperature', 0.7)
+            max_tokens = chat_model_input.get('max_tokens', 1024) if chat_model_input else self.get_property('max_tokens', 1024)
+            base_url = chat_model_input.get('base_url') if chat_model_input else self.get_property('base_url', None)
             
             # Create memory if provided
             memory = None
@@ -360,38 +385,59 @@ class AINodeExecutor(BaseNodeExecutor):
             else:
                 self.log_execution("No memory input provided to AI Agent")
             
-            # Determine API key based on model
-            # First check if chat_model_input has an api_key (from the connected chat model node)
+            # Determine API key - priority: chat_model_input > node properties > context/env
             api_key = None
             if chat_model_input and 'api_key' in chat_model_input:
                 api_key = chat_model_input['api_key']
+                self.log_execution("Using API key from connected chat model")
             
-            # If no API key from chat model, determine based on model type
+            # If no API key from chat model, check node properties first
+            if not api_key:
+                api_key = self.get_property('api_key', '')
+                if api_key:
+                    self.log_execution("Using API key from node properties")
+            
+            # If still no API key, determine based on model type from context/env
             if not api_key:
                 if model.startswith('llama-') or model.startswith('mixtral-') or model.startswith('gemma-'):
                     # Use Groq API key
                     api_key = context.get('groq_api_key') or os.getenv('GROQ_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("Groq API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("Groq API key not found. Please configure it in the node settings or connect a Groq chat model node.")
                     base_url = base_url or "https://api.groq.com/openai/v1"
                 elif model.startswith('claude-'):
                     # Use Anthropic API key
                     api_key = context.get('anthropic_api_key') or os.getenv('ANTHROPIC_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("Anthropic API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("Anthropic API key not found. Please configure it in the node settings or connect an Anthropic chat model node.")
                     base_url = base_url or "https://api.anthropic.com/v1"
                 elif model.startswith('gemini-'):
                     # Use Google API key
                     api_key = context.get('google_api_key') or os.getenv('GOOGLE_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("Google API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("Google API key not found. Please configure it in the node settings or connect a Google Gemini chat model node.")
                     base_url = base_url or "https://generativelanguage.googleapis.com/v1"
                 else:
                     # Default to OpenAI
                     api_key = context.get('openai_api_key') or os.getenv('OPENAI_API_KEY')
                     if not api_key:
-                        raise NodeExecutionError("OpenAI API key not found. Please configure it in the chat model node settings.")
+                        raise NodeExecutionError("OpenAI API key not found. Please configure it in the node settings or connect an OpenAI chat model node.")
                     base_url = base_url or "https://api.openai.com/v1"
+            
+            # Set base_url based on API key type if not already set
+            if not base_url and api_key:
+                if api_key.startswith('gsk_'):
+                    # Groq API key
+                    base_url = "https://api.groq.com/openai/v1"
+                elif api_key.startswith('sk-ant-'):
+                    # Anthropic API key
+                    base_url = "https://api.anthropic.com/v1"
+                elif api_key.startswith('sk-') and len(api_key) > 50:
+                    # OpenAI API key (longer format)
+                    base_url = "https://api.openai.com/v1"
+                elif not api_key.startswith('sk-'):
+                    # Google API key (doesn't start with sk-)
+                    base_url = "https://generativelanguage.googleapis.com/v1"
             
             # Process tools input to create actual tool instances
             tool_instances = []

@@ -7,7 +7,8 @@ import {
   textProperty,
   valueProperty,
   jsonProperty,
-  claudeModels
+  claudeModels,
+  apiKeyProperty
 } from '../base/commonProperties';
 
 export const aiNodes = {
@@ -26,6 +27,14 @@ export const aiNodes = {
         required: false,
         placeholder: 'Enter your query or message here...',
         description: 'The user message/query to send to the AI agent. If empty, will use input from connected nodes or default message.'
+      },
+      api_key: {
+        type: 'password',
+        label: 'API Key (Optional)',
+        default: '',
+        required: false,
+        placeholder: 'Auto-filled from connected chat model, or enter manually',
+        description: 'API key for the AI model. If a chat model (like Groq Llama) is connected, its API key will be used automatically. You can also enter a key manually here.'
       }
     }
   }),
