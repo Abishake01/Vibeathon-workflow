@@ -1,0 +1,64 @@
+{
+  "name": "Hello Webhook Workflow",
+  "description": "A simple webhook that responds with a greeting",
+  "nodes": [
+    {
+      "id": "node_1",
+      "type": "webhook",
+      "position": { "x": 100, "y": 100 },
+      "data": {
+        "type": "webhook",
+        "label": "Webhook Trigger",
+        "properties": {
+          "path": "/hello",
+          "method": ["POST"]
+        }
+      }
+    },
+    {
+      "id": "node_2",
+      "type": "text-transform",
+      "position": { "x": 350, "y": 100 },
+      "data": {
+        "type": "text-transform",
+        "label": "Format Response",
+        "properties": {
+          "operation": "template",
+          "template": "Hello! You sent: {{ $json.body.message || 'No message received' }}\n\nTimestamp: {{ $json.body.timestamp || 'N/A' }}",
+          "text": "",
+          "find": "",
+          "replace": "",
+          "pattern": "",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "node_3",
+      "type": "output",
+      "position": { "x": 600, "y": 100 },
+      "data": {
+        "type": "output",
+        "label": "Response",
+        "properties": {}
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "node_1",
+      "target": "node_2",
+      "sourceHandle": "main",
+      "targetHandle": "main"
+    },
+    {
+      "id": "e2",
+      "source": "node_2",
+      "target": "node_3",
+      "sourceHandle": "main",
+      "targetHandle": "main"
+    }
+  ]
+}
+

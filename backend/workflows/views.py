@@ -15,7 +15,10 @@ import uuid
 import asyncio
 import os
 import time
+import logging
 from asgiref.sync import async_to_sync
+
+logger = logging.getLogger(__name__)
 
 from .models import Workflow, WorkflowExecution, Credential, ExportedWorkflow, CustomWidget
 from .serializers import (
@@ -111,6 +114,10 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def execute_node(self, request, pk=None):
         """Execute a single node in the workflow"""
+        # Initialize logger at the start
+        import logging
+        logger = logging.getLogger(__name__)
+        
         workflow = self.get_object()
         serializer = ExecuteNodeSerializer(data=request.data)
         
@@ -131,25 +138,74 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                 'error': f'Node {node_id} not found in workflow'
             }, status=status.HTTP_404_NOT_FOUND)
         
+        # Get node properties once
+        node_properties = node.get('data', {}).get('properties', {})
+        
+        # If this is a webhook trigger node, check if test_json is in the node properties and use it
+        # This takes priority over any existing trigger_data
+        if node.get('data', {}).get('type') == 'webhook':
+            test_json = node_properties.get('test_json', '')
+            if test_json and test_json.strip():
+                try:
+                    import json
+                    import time
+                    test_body = json.loads(test_json)
+                    # Prepare webhook trigger data with test JSON
+                    trigger_data = {
+                        'method': 'POST',
+                        'path': node_properties.get('path', '/webhook'),
+                        'headers': {},
+                        'body': test_body,  # This is the actual test JSON data
+                        'query_params': {},
+                        'timestamp': time.time()
+                    }
+                    logger.info(f"✅ Using test_json from webhook node properties: {test_body}")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"❌ Invalid test_json in webhook node properties: {e}")
+            elif not trigger_data.get('body'):
+                # If no test_json and no body in trigger_data, use default
+                logger.info("⚠️ No test_json found in webhook properties, using default trigger data")
+        
         # Log node properties for debugging
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Executing node {node_id} with properties: {node.get('data', {}).get('properties', {})}")
-        logger.info(f"user_message property: {node.get('data', {}).get('properties', {}).get('user_message', 'NOT FOUND')}")
+        logger.info(f"Executing node {node_id} with properties: {node_properties}")
+        logger.info(f"user_message property: {node_properties.get('user_message', 'NOT FOUND')}")
+        if node.get('data', {}).get('type') == 'webhook':
+            test_json_value = node_properties.get('test_json', '')
+            logger.info(f"test_json property present: {bool(test_json_value)}")
+            logger.info(f"test_json length: {len(test_json_value) if test_json_value else 0}")
+            logger.info(f"Final trigger_data body: {trigger_data.get('body', 'NOT SET')}")
         
         # Generate execution ID
         execution_id = str(uuid.uuid4())
         
         try:
-            context = async_to_sync(execution_engine.execute_workflow)(
-                workflow_id=str(workflow.id),
-                execution_id=execution_id,
-                nodes=workflow.nodes,
-                edges=workflow.edges,
-                trigger_data=trigger_data,
-                credentials=credentials,
-                start_node_id=node_id
-            )
+            # If this is a trigger node, execute the full workflow
+            # Otherwise, execute from this node forward through all downstream nodes
+            node_type = node.get('data', {}).get('type', '')
+            is_trigger_node = node_type in ['webhook', 'manual-trigger', 'when-chat-received', 'schedule']
+            
+            if is_trigger_node:
+                # Execute full workflow from trigger
+                context = async_to_sync(execution_engine.execute_workflow)(
+                    workflow_id=str(workflow.id),
+                    execution_id=execution_id,
+                    nodes=workflow.nodes,
+                    edges=workflow.edges,
+                    trigger_data=trigger_data,
+                    credentials=credentials,
+                    start_node_id=None  # Execute full workflow
+                )
+            else:
+                # Execute from this node forward through all downstream nodes
+                context = async_to_sync(execution_engine.execute_workflow)(
+                    workflow_id=str(workflow.id),
+                    execution_id=execution_id,
+                    nodes=workflow.nodes,
+                    edges=workflow.edges,
+                    trigger_data=trigger_data,
+                    credentials=credentials,
+                    start_node_id=node_id
+                )
             
             # Save execution to database
             execution = WorkflowExecution.objects.create(
@@ -352,6 +408,215 @@ def trigger_chat(request):
         return Response({
             'error': str(e),
             'execution_id': execution_id
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt
+@api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([AllowAny])  # Webhooks should be accessible without authentication
+def trigger_webhook(request, workflow_id: str, webhook_path: str = ''):
+    """
+    Webhook endpoint to trigger workflows
+    
+    URL pattern: /api/workflows/{workflow_id}/webhook/{path}/
+    Supports all HTTP methods (GET, POST, PUT, PATCH, DELETE)
+    """
+    try:
+        workflow = get_object_or_404(Workflow, id=workflow_id)
+        
+        # Find webhook trigger node matching the path
+        webhook_trigger = None
+        for node in workflow.nodes:
+            if node.get('data', {}).get('type') == 'webhook':
+                node_path = node.get('data', {}).get('properties', {}).get('path', '').lstrip('/')
+                node_methods = node.get('data', {}).get('properties', {}).get('method', ['POST'])
+                if isinstance(node_methods, list):
+                    node_methods = node_methods
+                else:
+                    node_methods = [node_methods] if node_methods else ['POST']
+                
+                # Check if path matches and method is allowed
+                if node_path == webhook_path.lstrip('/') and request.method in node_methods:
+                    webhook_trigger = node
+                    break
+        
+        if not webhook_trigger:
+            return Response({
+                'error': f'Webhook trigger not found for path "{webhook_path}" and method "{request.method}"'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Extract request data
+        if request.method in ['POST', 'PUT', 'PATCH']:
+            try:
+                request_data = request.data if hasattr(request, 'data') else {}
+            except:
+                request_data = {}
+        else:
+            request_data = dict(request.GET)
+        
+        # Execute workflow
+        execution_id = str(uuid.uuid4())
+        
+        logger.info(f"🚀 Executing workflow {workflow_id} via webhook trigger")
+        logger.info(f"   Path: {webhook_path}, Method: {request.method}")
+        logger.info(f"   Nodes: {len(workflow.nodes)}, Edges: {len(workflow.edges)}")
+        logger.info(f"   Request data: {request_data}")
+        
+        try:
+            # Prepare trigger data
+            trigger_data = {
+                'method': request.method,
+                'path': webhook_path,
+                'headers': dict(request.headers),
+                'body': request_data,
+                'query_params': dict(request.GET),
+                'timestamp': time.time()
+            }
+            
+            logger.info(f"📋 Trigger data prepared: {trigger_data}")
+            
+            # Execute workflow - THIS IS THE CRITICAL STEP
+            context = async_to_sync(execution_engine.execute_workflow)(
+                workflow_id=str(workflow.id),
+                execution_id=execution_id,
+                nodes=workflow.nodes,
+                edges=workflow.edges,
+                trigger_data=trigger_data,
+                credentials={}
+            )
+            
+            logger.info(f"✅ Workflow execution completed: {context.status}")
+            logger.info(f"   Executed {len(context.execution_order)} nodes: {context.execution_order}")
+            logger.info(f"   Node states: {list(context.node_states.keys())}")
+            logger.info(f"   Node results: {list(context.node_results.keys())}")
+            
+            # Log each node's execution status
+            for node_id, node_state in context.node_states.items():
+                logger.info(f"   Node {node_id}: status={node_state.get('status')}, has_output={node_state.get('output') is not None}")
+            
+            if context.errors:
+                logger.warning(f"⚠️ Workflow execution had errors: {context.errors}")
+            
+            # Save execution
+            execution = WorkflowExecution.objects.create(
+                workflow=workflow,
+                status=context.status,
+                started_at=context.start_time,
+                finished_at=context.end_time,
+                execution_order=context.execution_order,
+                node_states=context.node_states,
+                errors=context.errors,
+                trigger_data={
+                    'method': request.method,
+                    'path': webhook_path,
+                    'body': request_data
+                }
+            )
+            
+            # Return response from workflow execution
+            # Check if workflow has a response in the output
+            response_data = context.node_states.get('output', {})
+            if isinstance(response_data, dict) and 'main' in response_data:
+                response_data = response_data['main']
+            
+            # Prepare enhanced execution dict with node outputs
+            # This ensures node_states always include outputs, even if no listeners
+            enhanced_node_states = {}
+            for node_id, node_state in context.node_states.items():
+                # Get output from node_state first, then fallback to node_results
+                node_output = node_state.get('output')
+                if not node_output:
+                    node_output = context.node_results.get(node_id)
+                
+                enhanced_node_states[node_id] = {
+                    **node_state,
+                    'output': node_output  # Ensure output is always included
+                }
+                
+                logger.info(f"   Node {node_id}: status={node_state.get('status')}, has_output={node_output is not None}, output_type={type(node_output).__name__}")
+            
+            execution_dict = context.to_dict()
+            execution_dict['node_states'] = enhanced_node_states  # Replace with enhanced states
+            
+            # Check if there's an active listener for this workflow and broadcast event
+            # IMPORTANT: Do this AFTER workflow execution succeeds, but don't fail if it errors
+            try:
+                from .webhook_listener import get_workflow_listeners, record_webhook_request, should_process_request, active_listeners
+                
+                # Debug: Log all active listeners
+                logger.info(f"Total active listeners: {len(active_listeners)}")
+                for lid, linfo in active_listeners.items():
+                    logger.info(f"  Listener {lid}: workflow_id={linfo['workflow_id']}, status={linfo['status']}, user_id={linfo['user_id']}")
+                
+                # Find active listeners for this workflow (by workflow_id, not user_id)
+                # This works even for unauthenticated webhook requests
+                workflow_id_str = str(workflow.id)
+                workflow_listeners = get_workflow_listeners(workflow_id_str)
+                
+                logger.info(f"Looking for listeners for workflow {workflow_id_str}, found {len(workflow_listeners)} listeners")
+                
+                # Use the already-prepared enhanced_node_states and execution_dict
+                execution_result = {
+                    'execution_id': execution_id,
+                    'status': context.status,
+                    'data': response_data,
+                    'execution': execution_dict
+                }
+                
+                logger.info(f"📤 Broadcasting execution result to {len(workflow_listeners)} listeners")
+                logger.info(f"   Execution has {len(enhanced_node_states)} node states with outputs")
+                logger.info(f"   Node IDs in execution: {list(enhanced_node_states.keys())}")
+                
+                for listener_info in workflow_listeners:
+                    listener_id = listener_info['listener_id']
+                    if should_process_request(listener_id):
+                        logger.info(f"📡 Broadcasting webhook request to listener {listener_id} (status: {listener_info['status']})")
+                        try:
+                            record_webhook_request(
+                                listener_id,
+                                {
+                                    'method': request.method,
+                                    'path': webhook_path,
+                                    'headers': dict(request.headers),
+                                    'body': request_data,
+                                    'query_params': dict(request.GET),
+                                    'timestamp': time.time()
+                                },
+                                execution_result
+                            )
+                            logger.info(f"✅ Successfully broadcasted to listener {listener_id}")
+                        except Exception as broadcast_error:
+                            logger.error(f"❌ Error broadcasting to listener {listener_id}: {broadcast_error}", exc_info=True)
+                    else:
+                        logger.info(f"⏸️ Skipping listener {listener_id} (status: {listener_info['status']}, not running)")
+            except Exception as e:
+                # Don't fail the webhook if listener broadcasting fails
+                logger.error(f"❌ Error in listener broadcasting logic: {e}", exc_info=True)
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Return response with enhanced execution dict (always includes node outputs)
+            return Response({
+                'execution_id': execution_id,
+                'status': context.status,
+                'data': response_data,
+                'execution': execution_dict
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error executing webhook workflow: {e}", exc_info=True)
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': str(e),
+                'execution_id': execution_id,
+                'traceback': traceback.format_exc() if os.getenv('DEBUG') == 'True' else None
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+    except Exception as e:
+        logger.error(f"Error in webhook trigger: {e}")
+        return Response({
+            'error': f'Internal error: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

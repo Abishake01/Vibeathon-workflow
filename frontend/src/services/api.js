@@ -448,6 +448,186 @@ class ApiService {
       }),
     });
   }
+
+  // n8n Workflow Integration methods
+  async runN8nWorkflow(webhookUrl, data, options = {}) {
+    return this.request('/n8n/workflows/run/', {
+      method: 'POST',
+      body: JSON.stringify({
+        webhook_url: webhookUrl,
+        workflow_id: options.workflowId,
+        data: data,
+        secret: options.secret || '',
+        wait_for_result: options.waitForResult || false,
+      }),
+    });
+  }
+
+  async getWorkflowStatus(runId) {
+    return this.request(`/n8n/workflows/${runId}/status/`);
+  }
+
+  async listWorkflowRuns() {
+    return this.request('/n8n/workflows/runs/');
+  }
+
+  /**
+   * Subscribe to workflow updates via Server-Sent Events (SSE)
+   * @param {string} runId - The workflow run ID
+   * @param {Function} onUpdate - Callback function for updates
+   * @returns {EventSource} The EventSource connection
+   */
+  subscribeToWorkflowUpdates(runId, onUpdate) {
+    const token = this.getAccessToken();
+    const url = `${this.baseURL}/n8n/workflows/${runId}/stream/`;
+    
+    // Create EventSource with authentication
+    const eventSource = new EventSource(url + (token ? `?token=${token}` : ''));
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        onUpdate(data);
+      } catch (e) {
+        console.error('Error parsing SSE message:', e);
+      }
+    };
+    
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      eventSource.close();
+    };
+    
+    return eventSource;
+  }
+
+  // Webhook URL methods
+  async getWebhookUrl(workflowId) {
+    return this.request(`/workflows/${workflowId}/webhook-url/`);
+  }
+
+  async getBaseUrl() {
+    return this.request('/base-url/');
+  }
+
+  /**
+   * Call a backend workflow webhook directly
+   * @param {string} webhookUrl - Full webhook URL (e.g., http://localhost:8000/api/workflows/{id}/webhook/{path}/)
+   * @param {object} data - Data to send in the request body
+   * @param {string} method - HTTP method (default: POST)
+   * @returns {Promise} Response data
+   */
+  async callBackendWebhook(webhookUrl, data = {}, method = 'POST') {
+    // Extract base URL from webhook URL or use configured base URL
+    const url = webhookUrl.startsWith('http') ? webhookUrl : `${this.baseURL}${webhookUrl}`;
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    // Add auth token if available
+    const token = this.getAccessToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(url, {
+      method: method.toUpperCase(),
+      headers: headers,
+      body: JSON.stringify(data),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+      throw new Error(errorData.error || `Request failed with status ${response.status}`);
+    }
+    
+    return await response.json();
+  }
+
+  // Webhook Listener methods
+  async startWebhookListener(workflowId) {
+    return this.request(`/workflows/${workflowId}/listener/start/`, {
+      method: 'POST',
+    });
+  }
+
+  async pauseWebhookListener(listenerId) {
+    return this.request(`/listeners/${listenerId}/pause/`, {
+      method: 'POST',
+    });
+  }
+
+  async resumeWebhookListener(listenerId) {
+    return this.request(`/listeners/${listenerId}/resume/`, {
+      method: 'POST',
+    });
+  }
+
+  async stopWebhookListener(listenerId) {
+    return this.request(`/listeners/${listenerId}/stop/`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteWebhookListener(listenerId) {
+    return this.request(`/listeners/${listenerId}/delete/`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getWebhookListener(listenerId) {
+    return this.request(`/listeners/${listenerId}/`);
+  }
+
+  async listWebhookListeners() {
+    return this.request('/listeners/');
+  }
+
+  /**
+   * Subscribe to webhook listener updates via Server-Sent Events (SSE)
+   * @param {string} listenerId - The listener ID
+   * @param {Function} onUpdate - Callback function for updates
+   * @returns {EventSource} The EventSource connection
+   */
+  subscribeToWebhookListener(listenerId, onUpdate) {
+    const token = this.getAccessToken();
+    const url = `${this.baseURL}/listeners/${listenerId}/stream/`;
+    
+    // Create EventSource with authentication
+    // Note: EventSource doesn't support custom headers, so we need to pass token as query param
+    const fullUrl = url + (token ? `?token=${encodeURIComponent(token)}` : '');
+    console.log('🔌 Connecting to webhook listener stream:', fullUrl);
+    
+    const eventSource = new EventSource(fullUrl);
+    
+    eventSource.onopen = () => {
+      console.log('✅ SSE connection opened');
+    };
+    
+    eventSource.onmessage = (event) => {
+      try {
+        // Handle heartbeat comments
+        if (event.data.startsWith(':')) {
+          return;
+        }
+        const data = JSON.parse(event.data);
+        console.log('📨 SSE message received:', data);
+        onUpdate(data);
+      } catch (e) {
+        console.error('Error parsing SSE message:', e, event.data);
+      }
+    };
+    
+    eventSource.onerror = (error) => {
+      console.error('❌ SSE connection error:', error);
+      // Don't close immediately - might be temporary network issue
+      // eventSource.close();
+    };
+    
+    return eventSource;
+  }
 }
 
 export const apiService = new ApiService();

@@ -49,6 +49,9 @@ class OutputNodeExecutor(BaseNodeExecutor):
     
     async def _execute_readme_viewer(self, inputs: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute README viewer output - just pass through the content"""
+        # Get configured content from properties (default: 'work')
+        configured_content = self.get_property('content', 'work')
+        
         # Get content from input
         content = ''
         input_data = inputs.get('main', {})
@@ -90,6 +93,10 @@ class OutputNodeExecutor(BaseNodeExecutor):
                     content = str(input_data)
         else:
             content = str(input_data)
+        
+        # Priority: input data > configured content > default "work"
+        if not content or (isinstance(content, str) and not content.strip()):
+            content = configured_content if configured_content and configured_content.strip() else 'work'
         
         # Get title from properties
         title = self.get_property('title', 'Content Viewer')

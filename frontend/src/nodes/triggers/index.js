@@ -34,7 +34,15 @@ export const triggerNodes = {
     ],
     properties: {
       path: webhookPathProperty,
-      method: httpMethodsMultiProperty
+      method: httpMethodsMultiProperty,
+      test_json: {
+        type: 'textarea',
+        label: 'Test JSON (for testing workflow)',
+        default: '',
+        placeholder: '{"name": "Test User", "message": "Hello from test"}',
+        required: false,
+        description: 'Paste JSON data here to test the workflow. This will be used as the webhook body when you click Run.'
+      }
     }
   }),
 

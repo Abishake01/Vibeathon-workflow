@@ -171,7 +171,7 @@ class WorkflowExecutionEngine:
             executor_class = FlowNodeExecutor
         
         # Data transformation nodes
-        elif node_type in ['filter', 'edit-fields', 'code']:
+        elif node_type in ['filter', 'edit-fields', 'code', 'text-transform', 'notes']:
             executor_class = DataNodeExecutor
         
         # Action nodes
@@ -244,14 +244,24 @@ class WorkflowExecutionEngine:
                 # Get result from source node
                 source_result = context.get_node_result(source_id)
                 
+                # Debug logging
+                logger.debug(f"Getting input for node {node_id} from source {source_id}")
+                logger.debug(f"Source result type: {type(source_result)}, value: {source_result}")
+                
                 if source_result:
                     # Extract the specific output handle
                     if isinstance(source_result, dict) and source_output in source_result:
                         output_data = source_result[source_output]
+                        logger.debug(f"Extracted output_data from {source_output} handle: {type(output_data)}, keys: {list(output_data.keys()) if isinstance(output_data, dict) else 'N/A'}")
                     else:
                         output_data = source_result
-                    
-                    # If multiple nodes connect to 'main', collect them all
+                        logger.debug(f"Using source_result directly as output_data: {type(output_data)}")
+                else:
+                    logger.warning(f"No result found for source node {source_id}")
+                    output_data = None
+                
+                # If multiple nodes connect to 'main', collect them all
+                if output_data is not None:  # Only process if we have data
                     if target_input == 'main':
                         main_inputs.append({
                             'source_id': source_id,
@@ -259,6 +269,7 @@ class WorkflowExecutionEngine:
                         })
                         # Also store by source node ID for direct access
                         inputs[source_id] = output_data
+                        logger.debug(f"Added input from {source_id} to main_inputs: {type(output_data)}")
                     else:
                         # Store in inputs under the target handle name
                         inputs[target_input] = output_data
@@ -371,6 +382,12 @@ class WorkflowExecutionEngine:
             context.set_node_state(node_id, 'completed', output=result, input=inputs)
             context.execution_order.append(node_id)
             
+            # Debug logging for result storage
+            logger.debug(f"✅ Node {node_id} execution completed")
+            logger.debug(f"   Result type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+            if isinstance(result, dict) and 'main' in result:
+                logger.debug(f"   Main output type: {type(result['main'])}, keys: {list(result['main'].keys()) if isinstance(result['main'], dict) else 'N/A'}")
+            
             # Check for chat response
             if 'chat_response' in exec_context:
                 context.chat_response = exec_context['chat_response']
@@ -415,14 +432,22 @@ class WorkflowExecutionEngine:
         
         try:
             if start_node_id:
-                # Execute single node and its dependencies (not downstream nodes)
-                await self._execute_from_node(start_node_id, nodes, edges, context, progress_callback, include_downstream=False)
+                # Execute from this node forward through all downstream nodes
+                await self._execute_from_node(start_node_id, nodes, edges, context, progress_callback, include_downstream=True)
             else:
                 # Execute entire workflow
                 execution_order = self._topological_sort(nodes, edges)
+                logger.info(f"🔄 Executing workflow {workflow_id}, execution order: {execution_order}")
+                logger.info(f"   Total nodes to execute: {len(execution_order)}")
                 
                 for idx, node_id in enumerate(execution_order):
-                    node = next(n for n in nodes if n['id'] == node_id)
+                    node = next((n for n in nodes if n['id'] == node_id), None)
+                    if not node:
+                        logger.error(f"❌ Node {node_id} not found in workflow nodes!")
+                        continue
+                    
+                    node_type = node.get('data', {}).get('type', 'unknown')
+                    logger.info(f"▶️ Executing node {node_id} ({node_type}) [{idx+1}/{len(execution_order)}]")
                     
                     # Call progress callback
                     if progress_callback:
@@ -432,7 +457,13 @@ class WorkflowExecutionEngine:
                             'progress': (idx / len(execution_order)) * 100
                         })
                     
-                    await self.execute_node(node, edges, context)
+                    try:
+                        await self.execute_node(node, edges, context)
+                        logger.info(f"✅ Node {node_id} completed successfully")
+                    except Exception as node_error:
+                        logger.error(f"❌ Node {node_id} failed: {node_error}", exc_info=True)
+                        context.set_node_error(node_id, str(node_error))
+                        # Continue with next node instead of failing entire workflow
                     
                     # Call progress callback after node completion
                     if progress_callback:

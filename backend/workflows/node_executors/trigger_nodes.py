@@ -55,14 +55,49 @@ class TriggerNodeExecutor(BaseNodeExecutor):
         webhook_data = context.get('trigger_data', {})
         
         self.log_execution(f"Webhook trigger activated on path: {path}")
+        self.log_execution(f"Webhook trigger_data keys: {list(webhook_data.keys()) if isinstance(webhook_data, dict) else 'N/A'}")
+        self.log_execution(f"Webhook trigger_data body: {webhook_data.get('body', {})}")
+        
+        # Extract body data for easier access in downstream nodes
+        body_data = webhook_data.get('body', {})
+        
+        # If body is empty or missing, check if we have test_json in properties
+        # This is a fallback in case the execute_node endpoint didn't set it
+        if not body_data or (isinstance(body_data, dict) and len(body_data) == 0):
+            test_json = self.get_property('test_json', '')
+            self.log_execution(f"Checking for test_json in properties: {bool(test_json)}")
+            if test_json and test_json.strip():
+                try:
+                    import json
+                    body_data = json.loads(test_json)
+                    self.log_execution(f"✅ Using test_json from properties (fallback): {body_data}")
+                    # Update webhook_data with the parsed body
+                    webhook_data['body'] = body_data
+                except json.JSONDecodeError as e:
+                    self.log_execution(f"❌ Failed to parse test_json: {e}")
+            else:
+                self.log_execution(f"⚠️ No test_json found in properties, body remains empty")
+        
+        # Build output with both structured data and flattened body for compatibility
+        output = {
+            'path': path,
+            'methods': methods,
+            'data': webhook_data,  # Full webhook data structure
+            'body': body_data,  # Direct access to body
+            'headers': webhook_data.get('headers', {}),
+            'query_params': webhook_data.get('query_params', {}),
+            'method': webhook_data.get('method', 'POST'),
+            'timestamp': webhook_data.get('timestamp'),
+            'text': str(webhook_data)  # For compatibility
+        }
+        
+        # Also merge body fields directly into output for easier template access
+        # This allows templates like {{ $json.name }} to work directly
+        if isinstance(body_data, dict):
+            output.update(body_data)
         
         return {
-            'main': {
-                'path': path,
-                'methods': methods,
-                'data': webhook_data,
-                'text': str(webhook_data)  # For compatibility
-            }
+            'main': output
         }
     
     async def _execute_schedule(self, inputs: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:

@@ -7,6 +7,9 @@ import {
   FiChevronRight,
   FiPlay,
   FiArrowLeft,
+  FiLink2,
+  FiCopy,
+  FiCheck,
 } from "react-icons/fi";
 import { nodeTypeDefinitions } from "../../nodeTypes.jsx";
 import { useDynamicNodes } from "../../hooks/useDynamicNodes";
@@ -14,6 +17,7 @@ import { credentialsManager, credentialTypes } from "../../credentialsManager";
 import VariablesPanel from "./VariablesPanel.jsx";
 import ExpressionEditor from "./ExpressionEditor.jsx";
 import ResizablePanels from "./ResizablePanels.jsx";
+import apiService from "../../services/api";
 
 const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflowId, onRunPreviousNodes, edges = [], nodes = [] }) => {
   const { dynamicNodes } = useDynamicNodes();
@@ -38,6 +42,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
   const [isExecuting, setIsExecuting] = useState(false); // Track execution state
   const [expandedOutputGroups, setExpandedOutputGroups] = useState({}); // For schema view expand/collapse
   const expressionEditorRefs = useRef({});
+  const [webhookUrl, setWebhookUrl] = useState(null);
+  const [baseUrl, setBaseUrl] = useState(null);
+  const [webhookUrlLoading, setWebhookUrlLoading] = useState(false);
+  const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
 
   // Merge static and dynamic node definitions
   const allNodeDefinitions = useMemo(() => {
@@ -101,6 +109,69 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
       }
     }
   }, [getApiKeyFromConnectedNodes, node?.id, properties.api_key, inputValues.api_key]);
+
+  // Load webhook URL when webhook node is selected
+  useEffect(() => {
+    if (node?.data?.type === 'webhook') {
+      const webhookPath = properties?.path || node?.data?.properties?.path || '';
+      
+      if (workflowId && webhookPath) {
+        // Workflow is saved, fetch actual URL
+        setWebhookUrlLoading(true);
+        apiService.getWebhookUrl(workflowId)
+          .then(data => {
+            if (data.webhook_url) {
+              setWebhookUrl(data); // Store the full object
+              setBaseUrl(data.base_url);
+            } else {
+              setWebhookUrl(null);
+            }
+          })
+          .catch(err => {
+            console.error('Error fetching webhook URL:', err);
+            setWebhookUrl(null);
+          })
+          .finally(() => {
+            setWebhookUrlLoading(false);
+          });
+      } else if (webhookPath) {
+        // Workflow not saved yet, show preview URL
+        setWebhookUrlLoading(false);
+        apiService.getBaseUrl()
+          .then(data => {
+            const cleanPath = webhookPath.startsWith('/') ? webhookPath.slice(1) : webhookPath;
+            const previewUrl = `${data.base_url}/api/workflows/{workflow-id}/webhook/${cleanPath}/`;
+            setWebhookUrl({ 
+              webhook_url: previewUrl,
+              webhook_path: webhookPath,
+              method: properties?.method || ['POST'],
+              workflow_name: 'Preview (Save workflow to get actual URL)',
+              base_url: data.base_url
+            });
+            setBaseUrl(data.base_url);
+          })
+          .catch(err => {
+            console.error('Error fetching base URL:', err);
+            setWebhookUrl(null);
+          });
+      } else {
+        setWebhookUrl(null);
+      }
+    } else {
+      setWebhookUrl(null);
+    }
+  }, [node?.data?.type, workflowId, properties?.path, node?.data?.properties?.path]);
+
+  // Load base URL on mount
+  useEffect(() => {
+    apiService.getBaseUrl()
+      .then(data => {
+        setBaseUrl(data.base_url);
+      })
+      .catch(err => {
+        console.error('Error fetching base URL:', err);
+      });
+  }, []);
 
   // Load node output from localStorage when node changes
   useEffect(() => {
@@ -1521,6 +1592,135 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                       return null;
                     }
                   )}
+
+                {/* Webhook URL Display - Show for webhook trigger nodes */}
+                {node?.data?.type === 'webhook' && (
+                  <div className="property-field" style={{
+                    marginTop: '20px',
+                    padding: '16px',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                    borderRadius: '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                      <FiLink2 style={{ fontSize: '18px', color: '#3b82f6' }} />
+                      <label className="property-label" style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>
+                        Webhook URL
+                      </label>
+                    </div>
+                    
+                    {webhookUrlLoading ? (
+                      <div style={{ padding: '12px', textAlign: 'center', color: '#aaa' }}>
+                        Loading webhook URL...
+                      </div>
+                    ) : webhookUrl ? (
+                      <div>
+                        <div style={{
+                          display: 'flex',
+                          gap: '8px',
+                          alignItems: 'center',
+                          marginBottom: '8px'
+                        }}>
+                          <input
+                            type="text"
+                            value={typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || ''}
+                            readOnly
+                            style={{
+                              flex: 1,
+                              padding: '10px 12px',
+                              backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                              border: '1px solid rgba(59, 130, 246, 0.3)',
+                              borderRadius: '6px',
+                              color: (typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') ? '#fbbf24' : '#fff',
+                              fontSize: '13px',
+                              fontFamily: 'monospace'
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              const urlToCopy = typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '';
+                              if (!urlToCopy.includes('{workflow-id}')) {
+                                navigator.clipboard.writeText(urlToCopy);
+                                setWebhookUrlCopied(true);
+                                setTimeout(() => setWebhookUrlCopied(false), 2000);
+                              }
+                            }}
+                            disabled={(typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}')}
+                            style={{
+                              padding: '10px 16px',
+                              backgroundColor: (typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') 
+                                ? '#6b7280' 
+                                : (webhookUrlCopied ? '#10b981' : '#3b82f6'),
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: (typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') ? 'not-allowed' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontSize: '13px',
+                              fontWeight: '500',
+                              transition: 'all 0.2s',
+                              opacity: (typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') ? 0.6 : 1
+                            }}
+                            title={(typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') 
+                              ? "Save workflow first to get actual URL" 
+                              : "Copy webhook URL"}
+                          >
+                            {webhookUrlCopied ? (
+                              <>
+                                <FiCheck /> Copied!
+                              </>
+                            ) : (
+                              <>
+                                <FiCopy /> Copy
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <div style={{
+                          fontSize: '12px',
+                          color: '#aaa',
+                          marginTop: '8px',
+                          padding: '8px',
+                          backgroundColor: (typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}')
+                            ? 'rgba(251, 191, 36, 0.1)'
+                            : 'rgba(0, 0, 0, 0.2)',
+                          border: `1px solid ${(typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') 
+                            ? 'rgba(251, 191, 36, 0.3)' 
+                            : 'transparent'}`,
+                          borderRadius: '4px'
+                        }}>
+                          {(typeof webhookUrl === 'string' ? webhookUrl : webhookUrl?.webhook_url || '').includes('{workflow-id}') ? (
+                            <>
+                              <strong>⚠️ Preview URL:</strong> Save your workflow to get the actual webhook URL.
+                            </>
+                          ) : (
+                            <>
+                              <strong>💡 Tip:</strong> Use this URL to trigger your workflow from external services, n8n, or the Page Builder.
+                            </>
+                          )}
+                          {baseUrl && (
+                            <div style={{ marginTop: '4px' }}>
+                              <strong>Base URL:</strong> {baseUrl}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{
+                        padding: '12px',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '6px',
+                        color: '#fca5a5',
+                        fontSize: '13px'
+                      }}>
+                        ⚠️ Webhook path not configured. Please set a path in the properties above.
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Other Properties */}
                 {nodeTypeDef?.properties &&

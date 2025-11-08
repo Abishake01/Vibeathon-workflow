@@ -1,57 +1,299 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { FiFileText, FiEye, FiCopy, FiDownload } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 const READMEViewerNode = ({ data, selected }) => {
+  // Get configured content from properties (fallback only, not default)
+  const configuredContent = (data.properties?.content || data.content || '').trim();
+  // Initialize with empty string - will be set by execution output or configured content
   const [content, setContent] = useState('');
-  const [title, setTitle] = useState(data.title || 'Content Viewer');
+  const [title, setTitle] = useState(data.properties?.title || data.title || 'Content Viewer');
+  const lastContentRef = useRef('');
+  
+  // Debug logging
+  console.log('📄 README Viewer - Data:', {
+    nodeId: data.id,
+    hasProperties: !!data.properties,
+    propertiesContent: data.properties?.content,
+    dataContent: data.content,
+    configuredContent: configuredContent,
+    executionState: !!data.executionState
+  });
 
   // Update content when data changes (from workflow execution)
   useEffect(() => {
+    let output = null;
+    
+    // First, check data.executionState (from node execution)
     if (data.executionState?.output) {
-      // Handle different output formats
-      const output = data.executionState.output;
-      
-      // If output is a string, use it directly
-      if (typeof output === 'string') {
-        setContent(output);
-      }
-      // If output is an object, look for content/text/response fields
-      else if (output && typeof output === 'object') {
-        if (output.content) {
-          setContent(output.content);
-        } else if (output.text) {
-          setContent(output.text);
-        } else if (output.response) {
-          setContent(output.response);
-        } else if (output.main && typeof output.main === 'object') {
-          // Handle nested main object
-          if (output.main.content) {
-            setContent(output.main.content);
-          } else if (output.main.text) {
-            setContent(output.main.text);
-          } else if (output.main.response) {
-            setContent(output.main.response);
-          } else {
-            // Fallback to string representation of main object
-            setContent(JSON.stringify(output.main, null, 2));
+      output = data.executionState.output;
+      console.log('📄 README Viewer: Using executionState output', { nodeId: data.id });
+    }
+    // If not found, check localStorage for execution data (from webhook executions)
+    else {
+      try {
+        const storedData = localStorage.getItem('workflow_execution_data');
+        if (storedData) {
+          const executionData = JSON.parse(storedData);
+          const nodeId = data.id || data.nodeId;
+          if (nodeId) {
+            const nodeState = executionData.node_states?.[nodeId];
+            const nodeResult = executionData.node_results?.[nodeId];
+            
+            // Try to get output from node_states first
+            if (nodeState?.output) {
+              output = nodeState.output;
+              console.log('📄 README Viewer: Using node_states output', { 
+                nodeId, 
+                outputType: typeof output,
+                hasMain: output && typeof output === 'object' && 'main' in output,
+                outputKeys: output && typeof output === 'object' ? Object.keys(output) : []
+              });
+            } 
+            // Then try node_results (this is the actual result from backend)
+            else if (nodeResult) {
+              output = nodeResult;
+              console.log('📄 README Viewer: Using node_results', { 
+                nodeId, 
+                outputType: typeof output,
+                hasMain: output && typeof output === 'object' && 'main' in output,
+                outputKeys: output && typeof output === 'object' ? Object.keys(output) : []
+              });
+            }
           }
+        }
+      } catch (e) {
+        console.error('Error reading execution data from localStorage:', e);
+      }
+    }
+    
+    // Process the output - Priority: execution output (expression result) > actual data received > configured content > default "work"
+    if (output) {
+      let newContent = '';
+      let hasExpressionResult = false;
+      
+      console.log('📄 README Viewer: Processing output:', {
+        outputType: typeof output,
+        isObject: typeof output === 'object',
+        hasMain: output && typeof output === 'object' && 'main' in output,
+        outputKeys: output && typeof output === 'object' ? Object.keys(output) : []
+      });
+      
+      // If output is a string, use it directly (this is expression result)
+      if (typeof output === 'string') {
+        newContent = output;
+        hasExpressionResult = true;
+        console.log('📄 README Viewer: Using string output directly (expression result)');
+      }
+      // If output is an object, extract the actual content
+      else if (output && typeof output === 'object') {
+        // First check if it's the readme-viewer output structure: {main: {content: "...", ...}}
+        if (output.main && typeof output.main === 'object') {
+          // This is the structure from backend: {main: {content: "...", title: "...", ...}}
+          // The content field contains the expression result
+          if (output.main.content) {
+            newContent = output.main.content;
+            hasExpressionResult = true;
+            console.log('📄 README Viewer: Extracted content from output.main.content (expression result):', newContent.substring(0, 50));
+          } else if (output.main.text) {
+            newContent = output.main.text;
+            hasExpressionResult = true;
+            console.log('📄 README Viewer: Extracted content from output.main.text');
+          } else if (output.main.response) {
+            newContent = output.main.response;
+            hasExpressionResult = true;
+            console.log('📄 README Viewer: Extracted content from output.main.response');
+          } else {
+            // Show actual data received (the main object itself) - no expression result, show data
+            newContent = JSON.stringify(output.main, null, 2);
+            console.log('📄 README Viewer: Showing actual data received (main object)');
+          }
+        }
+        // Check top-level content/text fields (expression results)
+        else if (output.content) {
+          newContent = output.content;
+          hasExpressionResult = true;
+          console.log('📄 README Viewer: Using top-level content field (expression result)');
+        } else if (output.text) {
+          newContent = output.text;
+          hasExpressionResult = true;
+          console.log('📄 README Viewer: Using top-level text field');
+        } else if (output.response) {
+          newContent = output.response;
+          hasExpressionResult = true;
+          console.log('📄 README Viewer: Using top-level response field');
         } else {
-          // Last resort - stringify the entire output
-          setContent(JSON.stringify(output, null, 2));
+          // Show actual data received (the entire output object) - no expression result, show data
+          newContent = JSON.stringify(output, null, 2);
+          console.log('📄 README Viewer: Showing actual data received (entire output)');
         }
       }
-    } else if (data.content) {
-      setContent(data.content);
+      
+      if (newContent) {
+        console.log('📄 README Viewer: Setting content from execution output, length:', newContent.length, 'hasExpressionResult:', hasExpressionResult);
+        setContent(newContent);
+        lastContentRef.current = newContent;
+      } else {
+        console.log('📄 README Viewer: No content extracted from output');
+      }
+    } else {
+      // No execution output - use configured content only if it exists
+      const propsContent = (data.properties?.content || data.content || '').trim();
+      if (propsContent && propsContent !== 'work') {
+        console.log('📄 README Viewer: Using configured content (no execution output)');
+        setContent(propsContent);
+        lastContentRef.current = propsContent;
+      } else if (!propsContent) {
+        // Default to "work" only if no execution output and no configured content
+        console.log('📄 README Viewer: Using default "work" (no execution output, no configured content)');
+        setContent('work');
+        lastContentRef.current = 'work';
+      }
     }
-  }, [data.executionState, data.content]);
+  }, [data.executionState, data.properties?.content, data.content, data.id]);
+  
+  // Also listen for storage events (when localStorage is updated from other tabs/components)
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === 'workflow_execution_data') {
+        console.log('📄 README Viewer: Storage event detected, updating content');
+        // Trigger re-render by checking localStorage again
+        try {
+          const storedData = localStorage.getItem('workflow_execution_data');
+          if (storedData) {
+            const executionData = JSON.parse(storedData);
+            const nodeId = data.id || data.nodeId;
+            if (nodeId) {
+              const nodeState = executionData.node_states?.[nodeId];
+              const nodeResult = executionData.node_results?.[nodeId];
+              
+              let output = null;
+              if (nodeState?.output) {
+                output = nodeState.output;
+              } else if (nodeResult) {
+                output = nodeResult;
+              }
+              
+              if (output) {
+                let newContent = '';
+                if (typeof output === 'string') {
+                  newContent = output;
+                } else if (output && typeof output === 'object') {
+                  // Check for readme-viewer structure: {main: {content: "...", ...}}
+                  if (output.main && typeof output.main === 'object') {
+                    newContent = output.main.content || output.main.text || output.main.response || JSON.stringify(output.main, null, 2);
+                  } else if (output.content) {
+                    newContent = output.content;
+                  } else if (output.text) {
+                    newContent = output.text;
+                  } else {
+                    newContent = JSON.stringify(output, null, 2);
+                  }
+                }
+                if (newContent) {
+                  setContent(newContent);
+                  lastContentRef.current = newContent;
+                }
+              } else {
+                // No execution data - only use configured content if it exists
+                const propsContent = (data.properties?.content || data.content || '').trim();
+                if (propsContent && propsContent !== lastContentRef.current) {
+                  console.log('📄 README Viewer: Using configured content (no execution data in storage event)');
+                  setContent(propsContent);
+                  lastContentRef.current = propsContent;
+                } else if (!propsContent && lastContentRef.current !== 'work') {
+                  // Only show "work" if there's truly nothing
+                  setContent('work');
+                  lastContentRef.current = 'work';
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Error handling storage event:', e);
+        }
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    
+    // Also poll localStorage periodically (for same-tab updates)
+    const pollInterval = setInterval(() => {
+      try {
+        const storedData = localStorage.getItem('workflow_execution_data');
+        if (storedData) {
+          const executionData = JSON.parse(storedData);
+          const nodeId = data.id || data.nodeId;
+          if (nodeId) {
+            const nodeState = executionData.node_states?.[nodeId];
+            const nodeResult = executionData.node_results?.[nodeId];
+            
+            if (nodeState?.output || nodeResult) {
+              const output = nodeState?.output || nodeResult;
+              let newContent = '';
+              
+              if (typeof output === 'string') {
+                newContent = output;
+              } else if (output && typeof output === 'object') {
+                // Check for readme-viewer structure: {main: {content: "...", ...}}
+                if (output.main && typeof output.main === 'object') {
+                  newContent = output.main.content || output.main.text || output.main.response;
+                  if (!newContent) {
+                    newContent = typeof output.main === 'string' ? output.main : JSON.stringify(output.main, null, 2);
+                  }
+                } else if (output.content) {
+                  newContent = output.content;
+                } else if (output.text) {
+                  newContent = output.text;
+                } else {
+                  newContent = JSON.stringify(output, null, 2);
+                }
+              }
+              
+              if (newContent && newContent !== lastContentRef.current) {
+                setContent(newContent);
+                lastContentRef.current = newContent;
+              } else if (!newContent) {
+                // If no execution data, use configured content from properties
+                const propsContent = (data.properties?.content || data.content || '').trim();
+                if (propsContent && propsContent !== lastContentRef.current) {
+                  setContent(propsContent);
+                  lastContentRef.current = propsContent;
+                } else if (!propsContent && lastContentRef.current !== 'work') {
+                  setContent('work');
+                  lastContentRef.current = 'work';
+                }
+              }
+            } else {
+              // No execution data, use configured content
+              const propsContent = (data.properties?.content || data.content || '').trim();
+              if (propsContent && propsContent !== lastContentRef.current) {
+                setContent(propsContent);
+                lastContentRef.current = propsContent;
+              } else if (!propsContent && lastContentRef.current !== 'work') {
+                setContent('work');
+                lastContentRef.current = 'work';
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+    }, 1000); // Poll every second
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(pollInterval);
+    };
+  }, [data.id, data.properties?.content, data.content]);
 
   // Update title when properties change
   useEffect(() => {
-    setTitle(data.title || 'Content Viewer');
-  }, [data.title]);
+    setTitle(data.properties?.title || data.title || 'Content Viewer');
+  }, [data.properties?.title, data.title]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(content);
@@ -152,8 +394,8 @@ const READMEViewerNode = ({ data, selected }) => {
         ) : (
           <div className="readme-empty">
             <FiEye />
-            <p>No content to display</p>
-            <p className="readme-empty-subtitle">Connect a node to see content here</p>
+            <p>work</p>
+            <p className="readme-empty-subtitle">Configure content or connect a node to see data here</p>
           </div>
         )}
       </div>
@@ -162,3 +404,4 @@ const READMEViewerNode = ({ data, selected }) => {
 };
 
 export default READMEViewerNode;
+

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTheme } from '../../theme';
 import { useNavigation } from '../../router/AppRouter';
 import apiService from '../../services/api';
+import WorkflowTrigger from './WorkflowTrigger';
 import { 
   FiMenu, 
   FiGrid, 
@@ -17,7 +18,9 @@ import {
   FiEdit3,
   FiZap,
   FiX,
-  FiSettings
+  FiSettings,
+  FiLink2,
+  FiCopy
 } from 'react-icons/fi';
 import StudioEditor from '@grapesjs/studio-sdk/react';
 import '@grapesjs/studio-sdk/style';
@@ -80,6 +83,23 @@ function PageBuilder() {
     baseUrl: 'https://api.groq.com/openai/v1',
     llmProvider: 'groq'
   });
+  
+  // Workflow Trigger Modal state
+  const [showWorkflowConfigModal, setShowWorkflowConfigModal] = useState(false);
+  const [workflowConfig, setWorkflowConfig] = useState({
+    webhookUrl: '',
+    workflowId: '',
+    secret: '',
+    buttonText: 'Run Workflow',
+    waitForResult: false,
+    showStatus: true,
+    useBackendUrl: false,
+    customUrl: ''
+  });
+  const [selectedComponentForWorkflow, setSelectedComponentForWorkflow] = useState(null);
+  const [baseUrl, setBaseUrl] = useState(null);
+  const [availableWorkflows, setAvailableWorkflows] = useState([]);
+  const [workflowUrlLoading, setWorkflowUrlLoading] = useState(false);
   
   // Keep ref in sync with state
   useEffect(() => {
@@ -891,6 +911,36 @@ function PageBuilder() {
       }
     }
   }, []);
+
+  // Load base URL and available workflows when workflow config modal opens
+  useEffect(() => {
+    if (showWorkflowConfigModal) {
+      // Get base URL
+      apiService.getBaseUrl()
+        .then(data => {
+          setBaseUrl(data.base_url);
+          if (workflowConfig.useBackendUrl && !workflowConfig.webhookUrl) {
+            // Auto-populate with backend URL if enabled
+            setWorkflowConfig(prev => ({
+              ...prev,
+              customUrl: data.base_url
+            }));
+          }
+        })
+        .catch(err => {
+          console.error('Error fetching base URL:', err);
+        });
+
+      // Load available workflows
+      apiService.getWorkflows()
+        .then(workflows => {
+          setAvailableWorkflows(workflows || []);
+        })
+        .catch(err => {
+          console.error('Error fetching workflows:', err);
+        });
+    }
+  }, [showWorkflowConfigModal]);
 
   // Save AI settings
   const handleSaveAISettings = useCallback(() => {
@@ -1932,6 +1982,27 @@ function PageBuilder() {
                     </div>
                   </div>
                 `
+              },
+              
+              // Workflow Trigger Button
+              {
+                id: 'workflow-trigger-button',
+                label: 'Workflow Trigger',
+                category: 'Automation',
+                media: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+                content: `
+                  <button 
+                    class="workflow-trigger-btn" 
+                    data-workflow-webhook="" 
+                    data-workflow-id="" 
+                    data-workflow-secret=""
+                    data-workflow-wait="false"
+                    style="padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 16px; transition: all 0.2s;">
+                    Run Workflow
+                  </button>
+                  <div class="workflow-status" style="margin-top: 8px; display: none; padding: 8px 12px; border-radius: 4px; font-size: 14px;"></div>
+                `,
+                select: true
               }
             ]
           },
@@ -2208,6 +2279,323 @@ function PageBuilder() {
                 
                 // Initial check
                 setTimeout(updateFloatingButton, 500);
+              });
+            },
+            // Plugin to handle workflow trigger buttons
+            (editor) => {
+              editor.onReady(() => {
+                console.log('🔄 Workflow Trigger plugin initialized');
+                
+                // Function to handle workflow trigger button clicks
+                const handleWorkflowTrigger = async (buttonElement, webhookUrl, workflowId, secret, waitForResult) => {
+                  if (!webhookUrl) {
+                    alert('Workflow webhook URL is not configured. Please configure it in the component properties.');
+                    return;
+                  }
+                  
+                  const statusDiv = buttonElement.parentElement.querySelector('.workflow-status');
+                  const resultDiv = buttonElement.parentElement.querySelector('.workflow-result') || (() => {
+                    // Create result div if it doesn't exist
+                    const div = document.createElement('div');
+                    div.className = 'workflow-result';
+                    div.style.cssText = 'margin-top: 12px; padding: 12px; border-radius: 6px; display: none; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px;';
+                    buttonElement.parentElement.appendChild(div);
+                    return div;
+                  })();
+                  
+                  const originalText = buttonElement.textContent;
+                  
+                  // Update button state
+                  buttonElement.disabled = true;
+                  buttonElement.textContent = '⏳ Running...';
+                  buttonElement.style.opacity = '0.7';
+                  buttonElement.style.cursor = 'not-allowed';
+                  
+                  // Hide result div
+                  resultDiv.style.display = 'none';
+                  
+                  if (statusDiv) {
+                    statusDiv.style.display = 'block';
+                    statusDiv.textContent = 'Triggering workflow...';
+                    statusDiv.style.backgroundColor = '#e0e7ff';
+                    statusDiv.style.color = '#3730a3';
+                  }
+                  
+                  try {
+                    // Collect form data
+                    const formData = {};
+                    const form = buttonElement.closest('form') || document;
+                    const formElements = form.querySelectorAll('input, select, textarea');
+                    formElements.forEach(element => {
+                      if (element.name && element.value) {
+                        formData[element.name] = element.value;
+                      }
+                    });
+                    
+                    // Collect data from elements with data-workflow-field attribute
+                    const workflowFields = document.querySelectorAll('[data-workflow-field]');
+                    workflowFields.forEach(field => {
+                      const fieldName = field.getAttribute('data-workflow-field');
+                      const fieldValue = field.value || field.textContent || field.innerText;
+                      if (fieldName && fieldValue) {
+                        formData[fieldName] = fieldValue;
+                      }
+                    });
+                    
+                    // Prepare request data
+                    const requestData = {
+                      name: formData.name || 'User',
+                      message: formData.message || formData.text || 'Hello from Page Builder!',
+                      ...formData,
+                      componentId: buttonElement.getAttribute('data-component-id') || 'workflow-trigger',
+                      timestamp: new Date().toISOString()
+                    };
+                    
+                    let response;
+                    
+                    // Check if this is a backend workflow URL (contains /api/workflows/ and /webhook/)
+                    const isBackendWorkflow = webhookUrl.includes('/api/workflows/') && webhookUrl.includes('/webhook/');
+                    
+                    if (isBackendWorkflow) {
+                      // Call backend webhook directly
+                      const api = await import('../../services/api');
+                      response = await api.default.callBackendWebhook(webhookUrl, requestData, 'POST');
+                      
+                      // Backend workflow returns execution data directly
+                      buttonElement.textContent = '✓ Success';
+                      buttonElement.style.backgroundColor = '#10b981';
+                      
+                      if (statusDiv) {
+                        statusDiv.textContent = `Workflow ${response.status || 'completed'}`;
+                        statusDiv.style.backgroundColor = '#d1fae5';
+                        statusDiv.style.color = '#065f46';
+                      }
+                      
+                      // Display output data
+                      if (response.data) {
+                        resultDiv.style.display = 'block';
+                        resultDiv.style.backgroundColor = '#f0f9ff';
+                        resultDiv.style.border = '1px solid #3b82f6';
+                        resultDiv.style.color = '#1e40af';
+                        resultDiv.innerHTML = `
+                          <div style="font-weight: 600; margin-bottom: 8px; color: #1e40af;">
+                            📊 Workflow Output:
+                          </div>
+                          <pre style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${JSON.stringify(response.data, null, 2)}</pre>
+                          ${response.execution ? `
+                            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #93c5fd;">
+                              <div style="font-weight: 600; margin-bottom: 4px;">Execution Details:</div>
+                              <div style="font-size: 11px; line-height: 1.6;">
+                                <div>Status: <strong>${response.execution.status || 'N/A'}</strong></div>
+                                <div>Execution ID: ${response.execution.execution_id || 'N/A'}</div>
+                                ${response.execution.duration ? `<div>Duration: ${(response.execution.duration * 1000).toFixed(0)}ms</div>` : ''}
+                              </div>
+                            </div>
+                          ` : ''}
+                        `;
+                      } else if (response.execution) {
+                        resultDiv.style.display = 'block';
+                        resultDiv.style.backgroundColor = '#f0f9ff';
+                        resultDiv.style.border = '1px solid #3b82f6';
+                        resultDiv.style.color = '#1e40af';
+                        resultDiv.innerHTML = `
+                          <div style="font-weight: 600; margin-bottom: 8px;">📊 Workflow Execution:</div>
+                          <pre style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${JSON.stringify(response.execution, null, 2)}</pre>
+                        `;
+                      }
+                      
+                      // Reset button after 5 seconds (longer to allow viewing results)
+                      setTimeout(() => {
+                        buttonElement.textContent = originalText;
+                        buttonElement.style.backgroundColor = '';
+                        buttonElement.disabled = false;
+                        buttonElement.style.opacity = '1';
+                        buttonElement.style.cursor = 'pointer';
+                      }, 5000);
+                      
+                    } else {
+                      // External n8n workflow
+                      const runWorkflow = window.runN8nWorkflow || apiService.runN8nWorkflow.bind(apiService);
+                      response = await runWorkflow(
+                        webhookUrl,
+                        {
+                          formData: requestData,
+                          componentId: buttonElement.getAttribute('data-component-id') || 'workflow-trigger',
+                          timestamp: new Date().toISOString()
+                        },
+                        {
+                          workflowId,
+                          secret,
+                          waitForResult
+                        }
+                      );
+                      
+                      if (response.status === 'accepted' || response.status === 'success') {
+                        buttonElement.textContent = '✓ Success';
+                        buttonElement.style.backgroundColor = '#10b981';
+                        
+                        if (statusDiv) {
+                          statusDiv.textContent = response.message || 'Workflow triggered successfully';
+                          statusDiv.style.backgroundColor = '#d1fae5';
+                          statusDiv.style.color = '#065f46';
+                        }
+                        
+                        // If waitForResult, subscribe to updates
+                        if (waitForResult && response.run_id) {
+                          subscribeToWorkflowUpdates(response.run_id, (update) => {
+                            if (statusDiv) {
+                              statusDiv.textContent = update.message || `Step: ${update.step} - ${update.state}`;
+                            }
+                            
+                            if (update.state === 'done') {
+                              buttonElement.textContent = '✓ Completed';
+                              buttonElement.style.backgroundColor = '#10b981';
+                              if (statusDiv) {
+                                statusDiv.textContent = 'Workflow completed successfully';
+                                statusDiv.style.backgroundColor = '#d1fae5';
+                                statusDiv.style.color = '#065f46';
+                              }
+                              
+                              // Show result if available
+                              if (update.data) {
+                                resultDiv.style.display = 'block';
+                                resultDiv.style.backgroundColor = '#f0f9ff';
+                                resultDiv.style.border = '1px solid #3b82f6';
+                                resultDiv.style.color = '#1e40af';
+                                resultDiv.innerHTML = `
+                                  <div style="font-weight: 600; margin-bottom: 8px;">📊 Workflow Output:</div>
+                                  <pre style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${JSON.stringify(update.data, null, 2)}</pre>
+                                `;
+                              }
+                            } else if (update.state === 'error') {
+                              buttonElement.textContent = '✗ Error';
+                              buttonElement.style.backgroundColor = '#ef4444';
+                              if (statusDiv) {
+                                statusDiv.textContent = update.message || 'Workflow failed';
+                                statusDiv.style.backgroundColor = '#fee2e2';
+                                statusDiv.style.color = '#991b1b';
+                              }
+                            }
+                          });
+                        }
+                        
+                        // Reset button after 3 seconds
+                        setTimeout(() => {
+                          buttonElement.textContent = originalText;
+                          buttonElement.style.backgroundColor = '';
+                          buttonElement.disabled = false;
+                          buttonElement.style.opacity = '1';
+                          buttonElement.style.cursor = 'pointer';
+                        }, 3000);
+                      } else {
+                        throw new Error(response.error || 'Workflow trigger failed');
+                      }
+                    }
+                  } catch (error) {
+                    console.error('Error triggering workflow:', error);
+                    buttonElement.textContent = '✗ Error';
+                    buttonElement.style.backgroundColor = '#ef4444';
+                    buttonElement.disabled = false;
+                    buttonElement.style.opacity = '1';
+                    buttonElement.style.cursor = 'pointer';
+                    
+                    if (statusDiv) {
+                      statusDiv.textContent = error.message || 'Failed to trigger workflow';
+                      statusDiv.style.backgroundColor = '#fee2e2';
+                      statusDiv.style.color = '#991b1b';
+                    }
+                    
+                    // Show error in result div
+                    resultDiv.style.display = 'block';
+                    resultDiv.style.backgroundColor = '#fef2f2';
+                    resultDiv.style.border = '1px solid #ef4444';
+                    resultDiv.style.color = '#991b1b';
+                    resultDiv.innerHTML = `
+                      <div style="font-weight: 600; margin-bottom: 8px;">❌ Error:</div>
+                      <div>${error.message || 'Unknown error occurred'}</div>
+                    `;
+                  }
+                };
+                
+                // Function to subscribe to workflow updates
+                const subscribeToWorkflowUpdates = (runId, onUpdate) => {
+                  const eventSource = apiService.subscribeToWorkflowUpdates(runId, (update) => {
+                    onUpdate(update);
+                    
+                    if (update.state === 'done' || update.state === 'error') {
+                      eventSource.close();
+                    }
+                  });
+                  
+                  return eventSource;
+                };
+                
+                // Inject workflow trigger handler into canvas
+                const injectWorkflowHandler = () => {
+                  const canvas = editor.Canvas.getFrameEl();
+                  if (canvas && canvas.contentDocument) {
+                    const canvasDoc = canvas.contentDocument;
+                    const canvasWindow = canvas.contentWindow;
+                    
+                    // Store handler in window for access
+                    canvasWindow.handleWorkflowTrigger = handleWorkflowTrigger;
+                    // Import apiService dynamically to avoid circular dependencies
+                    canvasWindow.runN8nWorkflow = async (webhookUrl, data, options) => {
+                      const api = await import('../../services/api');
+                      return api.default.runN8nWorkflow(webhookUrl, data, options);
+                    };
+                    canvasWindow.callBackendWebhook = async (webhookUrl, data, method = 'POST') => {
+                      const api = await import('../../services/api');
+                      return api.default.callBackendWebhook(webhookUrl, data, method);
+                    };
+                    canvasWindow.subscribeToWorkflowUpdates = (runId, onUpdate) => {
+                      return apiService.subscribeToWorkflowUpdates(runId, onUpdate);
+                    };
+                    
+                    // Add click handlers to workflow trigger buttons
+                    const addClickHandlers = () => {
+                      const buttons = canvasDoc.querySelectorAll('.workflow-trigger-btn');
+                      buttons.forEach(button => {
+                        // Remove existing listeners
+                        const newButton = button.cloneNode(true);
+                        button.parentNode.replaceChild(newButton, button);
+                        
+                        // Add click handler
+                        newButton.addEventListener('click', (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          
+                          const webhookUrl = newButton.getAttribute('data-workflow-webhook');
+                          const workflowId = newButton.getAttribute('data-workflow-id') || '';
+                          const secret = newButton.getAttribute('data-workflow-secret') || '';
+                          const waitForResult = newButton.getAttribute('data-workflow-wait') === 'true';
+                          
+                          handleWorkflowTrigger(newButton, webhookUrl, workflowId, secret, waitForResult);
+                        });
+                      });
+                    };
+                    
+                    // Add handlers on load
+                    if (canvasDoc.readyState === 'complete') {
+                      addClickHandlers();
+                    } else {
+                      canvasDoc.addEventListener('DOMContentLoaded', addClickHandlers);
+                    }
+                    
+                    // Also add handlers after component updates
+                    editor.on('component:update', () => {
+                      setTimeout(addClickHandlers, 100);
+                    });
+                  }
+                };
+                
+                // Inject handler when canvas loads
+                editor.on('canvas:frame:load', () => {
+                  setTimeout(injectWorkflowHandler, 200);
+                });
+                
+                // Also inject on ready
+                setTimeout(injectWorkflowHandler, 500);
               });
             },
             // Plugin to ensure Tailwind CSS and all styles are loaded in all pages and canvas
@@ -3400,6 +3788,450 @@ function PageBuilder() {
                   }}
                 >
                   Save Settings
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+        {/* Workflow Configuration Modal */}
+        {showWorkflowConfigModal && createPortal(
+          <div className="import-modal-overlay" onClick={() => setShowWorkflowConfigModal(false)}>
+            <div className="import-modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+              <div className="import-modal-header">
+                <h2>
+                  <FiZap style={{ display: 'inline', marginRight: '8px' }} />
+                  Configure Workflow Trigger
+                </h2>
+                <button className="import-modal-close" onClick={() => setShowWorkflowConfigModal(false)}>
+                  <FiX />
+                </button>
+              </div>
+              <div className="import-modal-body">
+                {/* URL Source Selection */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    Webhook Source
+                  </label>
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
+                    <button
+                      onClick={() => setWorkflowConfig({ ...workflowConfig, useBackendUrl: false })}
+                      style={{
+                        flex: 1,
+                        padding: '10px 16px',
+                        borderRadius: '6px',
+                        border: `2px solid ${!workflowConfig.useBackendUrl ? '#667eea' : (theme === 'dark' ? '#444' : '#d1d5db')}`,
+                        backgroundColor: !workflowConfig.useBackendUrl 
+                          ? (theme === 'dark' ? 'rgba(102, 126, 234, 0.2)' : 'rgba(102, 126, 234, 0.1)')
+                          : 'transparent',
+                        color: theme === 'dark' ? '#fff' : '#333',
+                        cursor: 'pointer',
+                        fontWeight: !workflowConfig.useBackendUrl ? '600' : '400',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      External (n8n)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setWorkflowConfig({ 
+                          ...workflowConfig, 
+                          useBackendUrl: true,
+                          customUrl: baseUrl || ''
+                        });
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: '10px 16px',
+                        borderRadius: '6px',
+                        border: `2px solid ${workflowConfig.useBackendUrl ? '#667eea' : (theme === 'dark' ? '#444' : '#d1d5db')}`,
+                        backgroundColor: workflowConfig.useBackendUrl 
+                          ? (theme === 'dark' ? 'rgba(102, 126, 234, 0.2)' : 'rgba(102, 126, 234, 0.1)')
+                          : 'transparent',
+                        color: theme === 'dark' ? '#fff' : '#333',
+                        cursor: 'pointer',
+                        fontWeight: workflowConfig.useBackendUrl ? '600' : '400',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      Backend Workflow
+                    </button>
+                  </div>
+                </div>
+
+                {/* External n8n URL */}
+                {!workflowConfig.useBackendUrl && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ 
+                      display: 'block', 
+                      marginBottom: '8px', 
+                      fontWeight: 600, 
+                      fontSize: '14px',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}>
+                      n8n Webhook URL <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={workflowConfig.webhookUrl}
+                      onChange={(e) => setWorkflowConfig({ ...workflowConfig, webhookUrl: e.target.value })}
+                      placeholder="https://n8n.example.com/webhook/flows/your-workflow"
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                        color: theme === 'dark' ? '#fff' : '#333'
+                      }}
+                    />
+                    <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280' }}>
+                      The webhook URL from your n8n workflow trigger node.
+                    </p>
+                  </div>
+                )}
+
+                {/* Backend Workflow Selection */}
+                {workflowConfig.useBackendUrl && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ 
+                      display: 'block', 
+                      marginBottom: '8px', 
+                      fontWeight: 600, 
+                      fontSize: '14px',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}>
+                      Select Workflow <span style={{ color: '#ef4444' }}>*</span>
+                    </label>
+                    <select
+                      value={workflowConfig.workflowId}
+                      onChange={async (e) => {
+                        const selectedWorkflowId = e.target.value;
+                        setWorkflowConfig({ ...workflowConfig, workflowId: selectedWorkflowId });
+                        
+                        // Auto-fetch webhook URL for selected workflow
+                        if (selectedWorkflowId) {
+                          setWorkflowUrlLoading(true);
+                          try {
+                            const webhookData = await apiService.getWebhookUrl(selectedWorkflowId);
+                            if (webhookData.webhook_url) {
+                              setWorkflowConfig(prev => ({
+                                ...prev,
+                                webhookUrl: webhookData.webhook_url,
+                                workflowId: selectedWorkflowId
+                              }));
+                            }
+                          } catch (err) {
+                            console.error('Error fetching webhook URL:', err);
+                            alert('This workflow does not have a webhook trigger. Please add a webhook trigger node to the workflow.');
+                          } finally {
+                            setWorkflowUrlLoading(false);
+                          }
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                        color: theme === 'dark' ? '#fff' : '#333'
+                      }}
+                    >
+                      <option value="">Select a workflow...</option>
+                      {availableWorkflows.map(workflow => (
+                        <option key={workflow.id} value={workflow.id}>
+                          {workflow.name}
+                        </option>
+                      ))}
+                    </select>
+                    {workflowUrlLoading && (
+                      <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280' }}>
+                        Loading webhook URL...
+                      </p>
+                    )}
+                    {workflowConfig.webhookUrl && !workflowUrlLoading && (
+                      <div style={{
+                        marginTop: '12px',
+                        padding: '12px',
+                        backgroundColor: theme === 'dark' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.05)',
+                        border: `1px solid ${theme === 'dark' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)'}`,
+                        borderRadius: '6px'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                          <FiLink2 style={{ fontSize: '16px', color: '#3b82f6' }} />
+                          <strong style={{ fontSize: '13px', color: theme === 'dark' ? '#fff' : '#333' }}>
+                            Webhook URL:
+                          </strong>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            value={workflowConfig.webhookUrl}
+                            readOnly
+                            style={{
+                              flex: 1,
+                              padding: '8px 10px',
+                              backgroundColor: theme === 'dark' ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.05)',
+                              border: `1px solid ${theme === 'dark' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)'}`,
+                              borderRadius: '4px',
+                              color: theme === 'dark' ? '#fff' : '#333',
+                              fontSize: '12px',
+                              fontFamily: 'monospace'
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(workflowConfig.webhookUrl);
+                              const notification = document.createElement('div');
+                              notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 12px 20px; border-radius: 6px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
+                              notification.textContent = '✓ Webhook URL copied!';
+                              document.body.appendChild(notification);
+                              setTimeout(() => notification.remove(), 2000);
+                            }}
+                            style={{
+                              padding: '8px 12px',
+                              backgroundColor: '#3b82f6',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontSize: '12px'
+                            }}
+                            title="Copy webhook URL"
+                          >
+                            <FiCopy /> Copy
+                          </button>
+                        </div>
+                        <p style={{ marginTop: '8px', fontSize: '11px', color: theme === 'dark' ? '#aaa' : '#666' }}>
+                          💡 Share this URL with others or use it in external services.
+                        </p>
+                      </div>
+                    )}
+                    <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280' }}>
+                      Select a workflow with a webhook trigger. The URL will be automatically generated.
+                    </p>
+                  </div>
+                )}
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    Workflow ID (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={workflowConfig.workflowId}
+                    onChange={(e) => setWorkflowConfig({ ...workflowConfig, workflowId: e.target.value })}
+                    placeholder="my-workflow-123"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    Shared Secret (Optional)
+                  </label>
+                  <input
+                    type="password"
+                    value={workflowConfig.secret}
+                    onChange={(e) => setWorkflowConfig({ ...workflowConfig, secret: e.target.value })}
+                    placeholder="Your HMAC secret for webhook authentication"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  />
+                  <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280' }}>
+                    Used for HMAC signature authentication with n8n.
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    Button Text
+                  </label>
+                  <input
+                    type="text"
+                    value={workflowConfig.buttonText}
+                    onChange={(e) => setWorkflowConfig({ ...workflowConfig, buttonText: e.target.value })}
+                    placeholder="Run Workflow"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'flex', 
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={workflowConfig.waitForResult}
+                      onChange={(e) => setWorkflowConfig({ ...workflowConfig, waitForResult: e.target.checked })}
+                      style={{ marginRight: '8px' }}
+                    />
+                    <span style={{ fontSize: '14px' }}>Wait for workflow completion (real-time updates)</span>
+                  </label>
+                  <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280', marginLeft: '24px' }}>
+                    If enabled, the button will show real-time progress updates from the workflow.
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'flex', 
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={workflowConfig.showStatus}
+                      onChange={(e) => setWorkflowConfig({ ...workflowConfig, showStatus: e.target.checked })}
+                      style={{ marginRight: '8px' }}
+                    />
+                    <span style={{ fontSize: '14px' }}>Show status messages</span>
+                  </label>
+                </div>
+              </div>
+              <div className="import-modal-footer">
+                <button 
+                  onClick={() => {
+                    setShowWorkflowConfigModal(false);
+                    setWorkflowConfig({
+                      webhookUrl: '',
+                      workflowId: '',
+                      secret: '',
+                      buttonText: 'Run Workflow',
+                      waitForResult: false,
+                      showStatus: true
+                    });
+                  }}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: theme === 'dark' ? '#444' : '#e0e0e0',
+                    color: theme === 'dark' ? '#fff' : '#333',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    if (!workflowConfig.webhookUrl) {
+                      if (workflowConfig.useBackendUrl) {
+                        alert('Please select a workflow with a webhook trigger');
+                      } else {
+                        alert('Please enter a webhook URL');
+                      }
+                      return;
+                    }
+                    
+                    // Apply configuration to selected component
+                    if (selectedComponentForWorkflow && editor) {
+                      const component = selectedComponentForWorkflow;
+                      const button = component.find('.workflow-trigger-btn')[0];
+                      
+                      if (button) {
+                        button.set('attributes', {
+                          ...button.get('attributes'),
+                          'data-workflow-webhook': workflowConfig.webhookUrl,
+                          'data-workflow-id': workflowConfig.workflowId,
+                          'data-workflow-secret': workflowConfig.secret,
+                          'data-workflow-wait': workflowConfig.waitForResult.toString()
+                        });
+                        
+                        // Update button text
+                        button.set('content', workflowConfig.buttonText);
+                        
+                        // Update status div visibility
+                        const statusDiv = component.find('.workflow-status')[0];
+                        if (statusDiv) {
+                          statusDiv.setStyle({
+                            display: workflowConfig.showStatus ? 'block' : 'none'
+                          });
+                        }
+                        
+                        editor.refresh();
+                      }
+                    }
+                    
+                    setShowWorkflowConfigModal(false);
+                    
+                    // Show success notification
+                    const notification = document.createElement('div');
+                    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
+                    notification.textContent = '✓ Workflow trigger configured!';
+                    document.body.appendChild(notification);
+                    setTimeout(() => notification.remove(), 3000);
+                  }}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Save Configuration
                 </button>
               </div>
             </div>

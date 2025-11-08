@@ -63,5 +63,49 @@ export const dataNodes = {
         required: false
       }
     }
+  }),
+
+  'text-transform': createProcessingNode({
+    name: 'Text Transform',
+    category: 'Data',
+    color: '#10b981',
+    icon: 'FiType',
+    description: 'Transform text using templates, expressions, or operations',
+    properties: {
+      operation: {
+        type: 'select',
+        label: 'Operation',
+        default: 'template',
+        options: [
+          { value: 'template', label: 'Template (with expressions)' },
+          { value: 'uppercase', label: 'Uppercase' },
+          { value: 'lowercase', label: 'Lowercase' },
+          { value: 'capitalize', label: 'Capitalize' },
+          { value: 'replace', label: 'Replace Text' },
+          { value: 'extract', label: 'Extract Pattern' },
+          { value: 'trim', label: 'Trim Whitespace' },
+          { value: 'concat', label: 'Concatenate' }
+        ],
+        required: true
+      },
+      template: {
+        type: 'textarea',
+        label: 'Template',
+        default: '',
+        placeholder: 'Enter template with expressions, e.g., Hello {{ $json.name }}!',
+        required: false,
+        description: 'Use {{ $json.field }} to access data. Supports JavaScript expressions.'
+      },
+      text: textProperty('Text', false, 'Text to transform'),
+      find: textProperty('Find', false, 'Text to find (for replace/extract)'),
+      replace: textProperty('Replace', false, 'Replacement text'),
+      pattern: textProperty('Pattern', false, 'Regex pattern (for extract)'),
+      fields: {
+        type: 'keyValue',
+        label: 'Fields to Concatenate',
+        default: [],
+        description: 'Key-value pairs for concatenation'
+      }
+    }
   })
 };

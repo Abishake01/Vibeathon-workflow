@@ -13,7 +13,7 @@ import '@xyflow/react/dist/style.css';
 import { 
   FiMenu, FiPlay, FiSquare, FiSave, FiFolder, FiTrash2, 
   FiSun, FiMoon, FiEdit3, FiMessageCircle, FiGrid, FiLink2, FiSettings, FiDownload,
-  FiMoreVertical, FiUpload, FiType, FiPower, FiLayout
+  FiMoreVertical, FiUpload, FiType, FiPower, FiLayout, FiCopy, FiCheck, FiX, FiPause, FiRadio
 } from 'react-icons/fi';
 
 import {
@@ -38,6 +38,7 @@ import { nodeTypeDefinitions } from '../../nodeTypes.jsx';
 import { useDynamicNodes } from '../../hooks/useDynamicNodes';
 import { executionEngine } from '../../executionEngine';
 import { workflowApi } from '../../api/workflowApi';
+import apiService from '../../services/api';
 import { useTheme } from '../../theme.jsx';
 import { useNavigation } from '../../router/AppRouter';
 import NotesNode from './NotesNode';
@@ -182,6 +183,21 @@ function WorkflowBuilder() {
   const [isSaved, setIsSaved] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [webhookUrlModalOpen, setWebhookUrlModalOpen] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState(null);
+  const [webhookUrlLoading, setWebhookUrlLoading] = useState(false);
+  const [webhookUrlCopied, setWebhookUrlCopied] = useState(false);
+  const [baseUrl, setBaseUrl] = useState(null);
+  
+  // Webhook Listener state
+  const [listenerId, setListenerId] = useState(null);
+  const [listenerStatus, setListenerStatus] = useState('stopped'); // stopped, running, paused
+  const [listenerEvents, setListenerEvents] = useState([]);
+  const [listenerRequestCount, setListenerRequestCount] = useState(0);
+  const [listenerEventSource, setListenerEventSource] = useState(null);
+  const [listenerPanelOpen, setListenerPanelOpen] = useState(false);
+  const [lastExecutionTimestamp, setLastExecutionTimestamp] = useState(null);
+  const pollingIntervalRef = useRef(null);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(() => {
     const saved = localStorage.getItem('autoSaveEnabled');
     return saved !== null ? saved === 'true' : true; // Default ON
@@ -189,6 +205,198 @@ function WorkflowBuilder() {
   const menuRef = useRef(null);
   const hasLoadedWorkflow = useRef(false);
   const savedWorkflowData = useRef(null);
+  
+  // Cleanup listener on unmount
+  useEffect(() => {
+    return () => {
+      if (listenerEventSource) {
+        listenerEventSource.close();
+      }
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, [listenerEventSource]);
+
+  // Poll for latest workflow executions when listener is active
+  useEffect(() => {
+    // Only poll if listener is running and we have a workflow ID
+    if (listenerStatus === 'running' && currentWorkflowId) {
+      console.log('🔄 Starting execution polling for workflow:', currentWorkflowId);
+      
+      const pollExecutions = async () => {
+        try {
+          // Fetch latest executions
+          const executions = await apiService.request(`/workflows/${currentWorkflowId}/executions/`);
+          
+          if (executions && executions.length > 0) {
+            // Get the most recent execution
+            const latestExecution = executions[0];
+            const executionTimestamp = latestExecution.started_at || latestExecution.finished_at;
+            
+            // Only update if this is a new execution
+            if (!lastExecutionTimestamp || executionTimestamp > lastExecutionTimestamp) {
+              console.log('📥 Polling: New execution detected:', latestExecution.id);
+              setLastExecutionTimestamp(executionTimestamp);
+              
+              // First, set nodes to running state if execution is in progress
+              if (latestExecution.status === 'running' || latestExecution.status === 'completed') {
+                console.log('▶️ Polling: Setting workflow to running state');
+                setNodes((nds) =>
+                  nds.map((n) => {
+                    // Find if this node will be executed
+                    const willExecute = latestExecution.node_states?.[n.id] || 
+                                       latestExecution.execution_order?.includes(n.id);
+                    if (willExecute && latestExecution.status === 'running') {
+                      return {
+                        ...n,
+                        data: {
+                          ...n.data,
+                          executionState: {
+                            status: 'running',
+                            output: null,
+                            startTime: new Date(latestExecution.started_at)
+                          }
+                        }
+                      };
+                    }
+                    return n;
+                  })
+                );
+              }
+              
+              // Update nodes with execution results
+              if (latestExecution.node_states) {
+                console.log('🔄 Polling: Updating nodes with execution results');
+                console.log('   Execution node_states:', Object.keys(latestExecution.node_states));
+                console.log('   Current workflow node IDs:', nodes.map(n => n.id));
+                
+                setNodes((nds) => {
+                  console.log('   Polling: Current nodes in state:', nds.map(n => n.id));
+                  return nds.map((n) => {
+                    const nodeState = latestExecution.node_states[n.id];
+                    if (nodeState) {
+                      console.log(`   Polling: Processing node ${n.id} (${n.data.type}):`, {
+                        status: nodeState.status,
+                        has_output: !!nodeState.output,
+                        has_node_result: !!(latestExecution.node_results?.[n.id]),
+                        output_type: nodeState.output ? typeof nodeState.output : 'none',
+                        nodeState_keys: Object.keys(nodeState)
+                      });
+                      
+                      // Extract output for display
+                      let formattedOutput = '';
+                      const nodeResult = nodeState.output || latestExecution.node_results?.[n.id];
+                      
+                      if (nodeResult) {
+                        if (typeof nodeResult === 'string') {
+                          formattedOutput = nodeResult;
+                        } else if (nodeResult.main) {
+                          if (typeof nodeResult.main === 'string') {
+                            formattedOutput = nodeResult.main;
+                          } else if (nodeResult.main.content) {
+                            formattedOutput = nodeResult.main.content;
+                          } else if (nodeResult.main.text) {
+                            formattedOutput = nodeResult.main.text;
+                          } else {
+                            // For webhook trigger, show the full structure
+                            formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                          }
+                        } else if (nodeResult.content) {
+                          formattedOutput = nodeResult.content;
+                        } else if (nodeResult.text) {
+                          formattedOutput = nodeResult.text;
+                        } else {
+                          // For webhook trigger node, show the full output structure
+                          formattedOutput = JSON.stringify(nodeResult, null, 2);
+                        }
+                      }
+                      
+                      // Special handling for webhook trigger node - show webhook data
+                      if (n.data.type === 'webhook' && nodeResult && typeof nodeResult === 'object') {
+                        if (nodeResult.main && typeof nodeResult.main === 'object') {
+                          // Show webhook payload in a readable format
+                          const webhookData = nodeResult.main.data || nodeResult.main;
+                          if (webhookData && webhookData.body) {
+                            formattedOutput = `Webhook received:\n${JSON.stringify(webhookData.body, null, 2)}`;
+                          } else {
+                            formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                          }
+                        }
+                      }
+                      
+                      console.log(`   Polling: Node ${n.id} formatted output length:`, formattedOutput.length);
+                      
+                      // Update node with execution state
+                      const executionState = {
+                        status: nodeState.status || (latestExecution.status === 'completed' ? 'completed' : 'running'),
+                        output: formattedOutput || nodeResult,
+                        startTime: nodeState.startTime ? new Date(nodeState.startTime) : new Date(latestExecution.started_at),
+                        endTime: nodeState.endTime ? new Date(nodeState.endTime) : (latestExecution.finished_at ? new Date(latestExecution.finished_at) : null)
+                      };
+                      
+                      console.log(`   Polling: Updating node ${n.id} with execution state:`, executionState.status);
+                      
+                      return {
+                        ...n,
+                        data: {
+                          ...n.data,
+                          executionState: executionState
+                        }
+                      };
+                    } else {
+                      // Log if node is not in execution results
+                      if (n.data.type === 'webhook') {
+                        console.warn(`⚠️ Polling: Webhook trigger node ${n.id} not found in execution node_states`);
+                        console.warn(`   Available node IDs in execution:`, Object.keys(latestExecution.node_states));
+                      }
+                    }
+                    return n;
+                  });
+                });
+                
+                // Update localStorage for README viewer
+                try {
+                  const executionData = {
+                    workflow_id: currentWorkflowId,
+                    execution_id: latestExecution.id,
+                    node_states: latestExecution.node_states,
+                    node_results: latestExecution.node_results || {},
+                    execution_order: latestExecution.execution_order || [],
+                    timestamp: new Date().toISOString()
+                  };
+                  
+                  localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+                  console.log('💾 Polling: Updated localStorage with execution data');
+                } catch (e) {
+                  console.error('Error updating localStorage:', e);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Error polling executions:', err);
+        }
+      };
+      
+      // Poll immediately, then every 2 seconds
+      pollExecutions();
+      pollingIntervalRef.current = setInterval(pollExecutions, 2000);
+      
+      return () => {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+        }
+      };
+    } else {
+      // Stop polling if listener is not running
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    }
+  }, [listenerStatus, currentWorkflowId, lastExecutionTimestamp]);
   
   // Undo/Redo history
   const historyRef = useRef([]);
@@ -815,19 +1023,51 @@ function WorkflowBuilder() {
         // Wait a bit to ensure database is updated
         await new Promise(resolve => setTimeout(resolve, 100));
         
-        // Execute the single node with default trigger data if needed
+        // Prepare trigger data based on node type
+        let triggerData = {
+          message: 'Hello, how can I help you today?',
+          text: 'Hello, how can I help you today?',
+          user: 'anonymous',
+          channel: '',
+          timestamp: new Date().toISOString()
+        };
+        
+        // If this is a webhook node, check for test_json in properties
+        if (targetNode && targetNode.data.type === 'webhook') {
+          const properties = targetNode.data.properties || {};
+          if (properties.test_json && properties.test_json.trim()) {
+            try {
+              const testBody = JSON.parse(properties.test_json);
+              triggerData = {
+                method: 'POST',
+                path: properties.path || '/webhook',
+                headers: {},
+                body: testBody,
+                query_params: {},
+                timestamp: Date.now() / 1000
+              };
+              console.log('✅ Using test JSON for webhook node:', testBody);
+            } catch (e) {
+              console.error('❌ Invalid test JSON:', e);
+              showToast('Invalid JSON in test field. Please check the format.', 'error', 3000);
+              setIsExecuting(false);
+              setExecutingNodes(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(nodeId);
+                return newSet;
+              });
+              return;
+            }
+          }
+        }
+        
+        // Execute the single node
         const response = await fetch(`/api/workflows/${currentWorkflowId}/execute_node/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             node_id: nodeId,
-            trigger_data: {
-              message: 'Hello, how can I help you today?',
-              text: 'Hello, how can I help you today?',
-              user: 'anonymous',
-              channel: '',
-              timestamp: new Date().toISOString()
-            },
+            trigger_data: triggerData,
             credentials: {},
           }),
         });
@@ -836,153 +1076,334 @@ function WorkflowBuilder() {
           const result = await response.json();
           const endTime = new Date();
           
-          console.log('✅ Single node execution result:', result);
+          console.log('✅ Node execution result:', result);
           
-          // Get node result from execution
-          const nodeState = result.execution?.node_states?.[nodeId];
-          const nodeResult = nodeState?.output || result.execution?.node_results?.[nodeId];
+          // Check if this is a trigger node - if so, process like full workflow execution
+          const nodeType = node?.data?.type || '';
+          const isTriggerNode = ['webhook', 'manual-trigger', 'when-chat-received', 'schedule'].includes(nodeType);
           
-          // Extract formatted output
-          let formattedOutput = 'Execution completed';
-          if (nodeResult) {
-            if (typeof nodeResult === 'string') {
-              formattedOutput = nodeResult;
-            } else if (nodeResult.response) {
-              formattedOutput = nodeResult.response;
-            } else if (nodeResult.output) {
-              formattedOutput = nodeResult.output;
-            } else if (nodeResult.text) {
-              formattedOutput = nodeResult.text;
-            } else if (nodeResult.main) {
-              if (typeof nodeResult.main === 'string') {
-                formattedOutput = nodeResult.main;
-              } else if (nodeResult.main.response) {
-                formattedOutput = nodeResult.main.response;
-              } else if (nodeResult.main.output) {
-                formattedOutput = nodeResult.main.output;
-              } else if (nodeResult.main.text) {
-                formattedOutput = nodeResult.main.text;
-              } else if (nodeResult.main.sentiment) {
-                const sentiment = nodeResult.main.sentiment;
-                const confidence = nodeResult.main.confidence || 0.5;
-                formattedOutput = `Sentiment: ${sentiment.charAt(0).toUpperCase() + sentiment.slice(1)} (Confidence: ${confidence.toFixed(2)})`;
-              } else if (nodeResult.main.category) {
-                formattedOutput = `Category: ${nodeResult.main.category}`;
-              } else {
-                formattedOutput = JSON.stringify(nodeResult.main, null, 2);
-              }
-            } else {
-              formattedOutput = JSON.stringify(nodeResult, null, 2);
+          if (isTriggerNode && result.execution?.node_states) {
+            // This is a trigger node - execute full workflow like chat trigger
+            console.log('🔄 Trigger node detected - processing full workflow execution');
+            const nodeStates = result.execution.node_states;
+            const nodeResults = result.execution?.node_results || {};
+            
+            // Load existing execution data and merge with new data
+            const existingDataStr = localStorage.getItem('workflow_execution_data');
+            const existingData = existingDataStr ? JSON.parse(existingDataStr) : null;
+            let executionData = existingData || {
+              workflow_id: currentWorkflowId || 'local',
+              execution_id: result.execution_id || Date.now().toString(),
+              node_states: {},
+              node_results: {},
+              execution_order: [],
+              timestamp: new Date().toISOString()
+            };
+            
+            // Merge node_states
+            executionData.node_states = {
+              ...executionData.node_states,
+              ...nodeStates
+            };
+            
+            // Merge node_results
+            if (result.execution?.node_results) {
+              executionData.node_results = {
+                ...(executionData.node_results || {}),
+                ...result.execution.node_results
+              };
             }
-          }
-          
-          // Update node execution state
-          setNodes((nds) =>
-            nds.map((n) =>
-              n.id === nodeId
-                ? {
+            
+            // Merge execution_order
+            const newExecutionOrder = result.execution.execution_order || Object.keys(nodeStates);
+            const combinedOrder = [...new Set([...executionData.execution_order, ...newExecutionOrder])];
+            executionData.execution_order = combinedOrder;
+            
+            executionData.workflow_id = currentWorkflowId || executionData.workflow_id || 'local';
+            executionData.execution_id = result.execution_id || executionData.execution_id || Date.now().toString();
+            executionData.timestamp = new Date().toISOString();
+            
+            try {
+              localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+              console.log('💾 Stored full workflow execution data (trigger node):', {
+                triggerNode: nodeId,
+                nodeStates: Object.keys(executionData.node_states),
+                executionOrder: executionData.execution_order
+              });
+              window.dispatchEvent(new Event('workflowExecutionUpdate'));
+            } catch (error) {
+              console.error('Error storing execution data:', error);
+            }
+            
+            // Update ALL nodes in the workflow (like chat trigger does)
+            const executionOrder = result.execution.execution_order || Object.keys(nodeStates);
+            const allNodesToUpdate = executionOrder.filter(nId => {
+              const nState = nodeStates[nId];
+              const n = nodes.find(nd => nd.id === nId);
+              return n && nState;
+            });
+            
+            // Set all nodes to running at once
+            setNodes((nds) =>
+              nds.map((n) => {
+                if (allNodesToUpdate.includes(n.id)) {
+                  return {
                     ...n,
                     data: {
                       ...n.data,
                       executionState: {
-                        status: result.status === 'error' ? 'error' : 'completed',
-                        output: formattedOutput,
-                        startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
-                        endTime: endTime
+                        status: 'running',
+                        output: 'Executing...',
+                        timestamp: new Date().toISOString()
                       }
                     }
+                  };
+                }
+                return n;
+              })
+            );
+            
+            // Wait a bit for running animation
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Now update all nodes to completed/error state with proper output extraction
+            setNodes((nds) =>
+              nds.map((n) => {
+                const nState = nodeStates[n.id];
+                const nResult = nodeResults[n.id];
+                
+                if (nState && allNodesToUpdate.includes(n.id)) {
+                  // Extract output properly
+                  let formattedOutput = nState.output;
+                  
+                  // Use nodeResult if available, otherwise nodeState.output
+                  let outputToFormat = nState.output || nResult || nState;
+                  
+                  if (n.data.type === 'readme-viewer' && outputToFormat) {
+                    if (typeof outputToFormat === 'object') {
+                      if (outputToFormat.main && typeof outputToFormat.main === 'object') {
+                        formattedOutput = outputToFormat.main.content || outputToFormat.main.text || JSON.stringify(outputToFormat.main, null, 2);
+                      } else if (outputToFormat.content) {
+                        formattedOutput = outputToFormat.content;
+                      } else {
+                        formattedOutput = JSON.stringify(outputToFormat, null, 2);
+                      }
+                    }
+                  } else if (typeof outputToFormat === 'object' && outputToFormat !== null) {
+                    if (outputToFormat.main) {
+                      if (typeof outputToFormat.main === 'string') {
+                        formattedOutput = outputToFormat.main;
+                      } else if (outputToFormat.main.content) {
+                        formattedOutput = outputToFormat.main.content;
+                      } else if (outputToFormat.main.text) {
+                        formattedOutput = outputToFormat.main.text;
+                      } else {
+                        formattedOutput = JSON.stringify(outputToFormat.main, null, 2);
+                      }
+                    } else if (outputToFormat.content) {
+                      formattedOutput = outputToFormat.content;
+                    } else if (outputToFormat.text) {
+                      formattedOutput = outputToFormat.text;
+                    } else {
+                      formattedOutput = JSON.stringify(outputToFormat, null, 2);
+                    }
                   }
-                : n
-            )
-          );
-          
-          // Store execution data in localStorage
-          const existingData = localStorage.getItem('workflow_execution_data');
-          let executionData = existingData ? JSON.parse(existingData) : {
-            workflow_id: currentWorkflowId,
-            execution_id: result.execution_id || Date.now().toString(),
-            node_states: {},
-            execution_order: [],
-            timestamp: new Date().toISOString()
-          };
-          
-          // Merge new execution data
-          if (result.execution?.node_states) {
-            executionData.node_states = {
-              ...executionData.node_states,
-              ...result.execution.node_states
-            };
-          }
-          
-          // Also check node_results if available
-          if (result.execution?.node_results) {
-            Object.entries(result.execution.node_results).forEach(([nId, nResult]) => {
-              if (!executionData.node_states[nId]) {
-                executionData.node_states[nId] = {
-                  status: 'completed',
-                  output: nResult
+                  
+                  return {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      executionState: {
+                        status: nState.status || (result.status === 'error' ? 'error' : 'completed'),
+                        output: formattedOutput || 'Execution completed',
+                        error: nState.error,
+                        timestamp: nState.timestamp || new Date().toISOString(),
+                        startTime: new Date(),
+                        endTime: new Date()
+                      }
+                    }
+                  };
+                }
+                return n;
+              })
+            );
+            
+            // Show toast for workflow completion
+            const completedNodes = allNodesToUpdate.filter(id => nodeStates[id]?.status === 'completed').length;
+            const errorNodes = allNodesToUpdate.filter(id => nodeStates[id]?.status === 'error').length;
+            if (completedNodes > 0) {
+              showToast(`✅ Workflow executed: ${completedNodes} node(s) completed`, 'success', 3000);
+            }
+            if (errorNodes > 0) {
+              showToast(`❌ ${errorNodes} node(s) failed`, 'error', 4000);
+            }
+            
+            // Add all nodes to execution history
+            allNodesToUpdate.forEach(nId => {
+              const nState = nodeStates[nId];
+              const n = nodes.find(nd => nd.id === nId);
+              if (n && nState) {
+                const nodeExecution = {
+                  id: Date.now() + Math.random() + nId,
+                  nodeType: n.data.type,
+                  nodeName: n.data.label,
+                  status: nState.status,
+                  startTime: new Date(),
+                  endTime: new Date(),
+                  source: 'trigger-workflow',
+                  output: typeof nState.output === 'string' ? nState.output : JSON.stringify(nState.output, null, 2),
+                  duration: 100
                 };
-              } else if (!executionData.node_states[nId].output) {
-                executionData.node_states[nId].output = nResult;
+                setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
               }
             });
-            // Also store node_results separately for easier access
-            if (!executionData.node_results) {
-              executionData.node_results = {};
-            }
-            executionData.node_results = {
-              ...executionData.node_results,
-              ...result.execution.node_results
-            };
-          }
-          
-          if (result.execution?.execution_order) {
-            // Merge execution order, keeping unique nodes
-            const existingOrder = executionData.execution_order || [];
-            const newOrder = result.execution.execution_order || [];
-            executionData.execution_order = [...new Set([...existingOrder, ...newOrder])];
-          }
-          
-          executionData.execution_id = result.execution_id || executionData.execution_id;
-          executionData.timestamp = new Date().toISOString();
-          
-          try {
-            localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
-            console.log('💾 Stored single node execution data in localStorage:', {
-              nodeId,
-              nodeStates: Object.keys(executionData.node_states),
-              nodeResults: Object.keys(executionData.node_results || {}),
-              executionOrder: executionData.execution_order,
-              currentNodeState: executionData.node_states[nodeId],
-              currentNodeResult: executionData.node_results?.[nodeId],
-              currentNodeStateOutput: executionData.node_states[nodeId]?.output
-            });
-            // Dispatch custom event to notify VariablesPanel and NodeSettingsModal
-            window.dispatchEvent(new Event('workflowExecutionUpdate'));
-          } catch (error) {
-            console.error('Error storing execution data:', error);
-          }
-          
-          // Add to execution history
-          const nodeExecution = {
-            id: Date.now() + Math.random(),
-            nodeType: node.data.type,
-            nodeName: node.data.label,
-            status: result.status === 'error' ? 'error' : 'completed',
-            startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
-            endTime: endTime,
-            source: 'single-node',
-            output: formattedOutput,
-            duration: endTime - (nodeState?.startTime ? new Date(nodeState.startTime).getTime() : Date.now())
-          };
-          setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
-          
-          if (result.status === 'error') {
-            showToast(`❌ Node execution failed: ${result.error || 'Unknown error'}`, 'error', 3000);
+            
           } else {
-            // Show formatted output in toast
-            const shortOutput = formattedOutput.length > 100 ? formattedOutput.substring(0, 100) + '...' : formattedOutput;
-            showToast(`✅ ${node.data.label}: ${shortOutput}`, 'success', 3000);
+            // Single node execution (non-trigger node)
+            console.log('📌 Single node execution (non-trigger)');
+            
+            // Get node result from execution
+            const nodeState = result.execution?.node_states?.[nodeId];
+            const nodeResult = nodeState?.output || result.execution?.node_results?.[nodeId];
+            
+            // Extract formatted output
+            let formattedOutput = 'Execution completed';
+            if (nodeResult) {
+              if (typeof nodeResult === 'string') {
+                formattedOutput = nodeResult;
+              } else if (nodeResult.response) {
+                formattedOutput = nodeResult.response;
+              } else if (nodeResult.output) {
+                formattedOutput = nodeResult.output;
+              } else if (nodeResult.text) {
+                formattedOutput = nodeResult.text;
+              } else if (nodeResult.main) {
+                if (typeof nodeResult.main === 'string') {
+                  formattedOutput = nodeResult.main;
+                } else if (nodeResult.main.response) {
+                  formattedOutput = nodeResult.main.response;
+                } else if (nodeResult.main.output) {
+                  formattedOutput = nodeResult.main.output;
+                } else if (nodeResult.main.text) {
+                  formattedOutput = nodeResult.main.text;
+                } else if (nodeResult.main.sentiment) {
+                  const sentiment = nodeResult.main.sentiment;
+                  const confidence = nodeResult.main.confidence || 0.5;
+                  formattedOutput = `Sentiment: ${sentiment.charAt(0).toUpperCase() + sentiment.slice(1)} (Confidence: ${confidence.toFixed(2)})`;
+                } else if (nodeResult.main.category) {
+                  formattedOutput = `Category: ${nodeResult.main.category}`;
+                } else {
+                  formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                }
+              } else {
+                formattedOutput = JSON.stringify(nodeResult, null, 2);
+              }
+            }
+            
+            // Update node execution state
+            setNodes((nds) =>
+              nds.map((n) =>
+                n.id === nodeId
+                  ? {
+                      ...n,
+                      data: {
+                        ...n.data,
+                        executionState: {
+                          status: result.status === 'error' ? 'error' : 'completed',
+                          output: formattedOutput,
+                          startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
+                          endTime: endTime
+                        }
+                      }
+                    }
+                  : n
+              )
+            );
+            
+            // Store execution data in localStorage
+            const existingData = localStorage.getItem('workflow_execution_data');
+            let executionData = existingData ? JSON.parse(existingData) : {
+              workflow_id: currentWorkflowId,
+              execution_id: result.execution_id || Date.now().toString(),
+              node_states: {},
+              execution_order: [],
+              timestamp: new Date().toISOString()
+            };
+            
+            // Merge new execution data
+            if (result.execution?.node_states) {
+              executionData.node_states = {
+                ...executionData.node_states,
+                ...result.execution.node_states
+              };
+            }
+            
+            // Also check node_results if available
+            if (result.execution?.node_results) {
+              Object.entries(result.execution.node_results).forEach(([nId, nResult]) => {
+                if (!executionData.node_states[nId]) {
+                  executionData.node_states[nId] = {
+                    status: 'completed',
+                    output: nResult
+                  };
+                } else if (!executionData.node_states[nId].output) {
+                  executionData.node_states[nId].output = nResult;
+                }
+              });
+              // Also store node_results separately for easier access
+              if (!executionData.node_results) {
+                executionData.node_results = {};
+              }
+              executionData.node_results = {
+                ...executionData.node_results,
+                ...result.execution.node_results
+              };
+            }
+            
+            if (result.execution?.execution_order) {
+              // Merge execution order, keeping unique nodes
+              const existingOrder = executionData.execution_order || [];
+              const newOrder = result.execution.execution_order || [];
+              executionData.execution_order = [...new Set([...existingOrder, ...newOrder])];
+            }
+            
+            executionData.execution_id = result.execution_id || executionData.execution_id;
+            executionData.timestamp = new Date().toISOString();
+            
+            try {
+              localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+              console.log('💾 Stored single node execution data in localStorage:', {
+                nodeId,
+                nodeStates: Object.keys(executionData.node_states),
+                nodeResults: Object.keys(executionData.node_results || {}),
+                executionOrder: executionData.execution_order
+              });
+              window.dispatchEvent(new Event('workflowExecutionUpdate'));
+            } catch (error) {
+              console.error('Error storing execution data:', error);
+            }
+            
+            // Add to execution history
+            const nodeExecution = {
+              id: Date.now() + Math.random(),
+              nodeType: node.data.type,
+              nodeName: node.data.label,
+              status: result.status === 'error' ? 'error' : 'completed',
+              startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
+              endTime: endTime,
+              source: 'single-node',
+              output: formattedOutput,
+              duration: endTime - (nodeState?.startTime ? new Date(nodeState.startTime).getTime() : Date.now())
+            };
+            setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
+            
+            if (result.status === 'error') {
+              showToast(`❌ Node execution failed: ${result.error || 'Unknown error'}`, 'error', 3000);
+            } else {
+              // Show formatted output in toast
+              const shortOutput = formattedOutput.length > 100 ? formattedOutput.substring(0, 100) + '...' : formattedOutput;
+              showToast(`✅ ${node.data.label}: ${shortOutput}`, 'success', 3000);
+            }
           }
         } else {
           const error = await response.json();
@@ -2170,11 +2591,62 @@ function WorkflowBuilder() {
       return;
     }
 
-    // Find manual trigger node
+    // Find trigger node (manual trigger or webhook)
     const manualTrigger = nodes.find(node => node.data.type === 'manual-trigger');
-    if (!manualTrigger) {
-      showToast('No manual trigger found! Add a manual trigger to execute the workflow.', 'warning');
+    const webhookTrigger = nodes.find(node => node.data.type === 'webhook');
+    
+    if (!manualTrigger && !webhookTrigger) {
+      showToast('No trigger found! Add a manual trigger or webhook trigger to execute the workflow.', 'warning');
       return;
+    }
+    
+    // Determine trigger type and prepare trigger data
+    let triggerData = { text: 'Manual trigger execution' };
+    const triggerNode = manualTrigger || webhookTrigger;
+    
+    if (webhookTrigger) {
+      // Load webhook trigger properties
+      const savedInputs = localStorage.getItem(`inputValues_${webhookTrigger.id}`);
+      const properties = savedInputs ? JSON.parse(savedInputs) : (webhookTrigger.data.properties || {});
+      
+      // Parse test JSON if provided
+      let testBody = {};
+      if (properties.test_json && properties.test_json.trim()) {
+        try {
+          testBody = JSON.parse(properties.test_json);
+          console.log('✅ Using test JSON from webhook trigger:', testBody);
+        } catch (e) {
+          console.error('❌ Invalid test JSON:', e);
+          showToast('Invalid JSON in test field. Please check the format.', 'error', 3000);
+          return;
+        }
+      } else {
+        // Default test data if no JSON provided
+        testBody = {
+          name: 'Test User',
+          message: 'Hello from workflow test',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      // Prepare webhook trigger data
+      triggerData = {
+        method: 'POST',
+        path: properties.path || '/webhook',
+        headers: {},
+        body: testBody,
+        query_params: {},
+        timestamp: Date.now() / 1000
+      };
+      
+      console.log('🚀 Executing workflow with webhook trigger data:', triggerData);
+    } else if (manualTrigger) {
+      // Use manual trigger message if provided
+      const savedInputs = localStorage.getItem(`inputValues_${manualTrigger.id}`);
+      const properties = savedInputs ? JSON.parse(savedInputs) : (manualTrigger.data.properties || {});
+      if (properties.message) {
+        triggerData = { text: properties.message, message: properties.message };
+      }
     }
 
     // Validate all nodes before execution
@@ -2286,7 +2758,7 @@ function WorkflowBuilder() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            trigger_data: { text: 'Manual trigger execution' },
+            trigger_data: triggerData,
             credentials: {}
           })
         });
@@ -2353,91 +2825,189 @@ function WorkflowBuilder() {
             console.error('Error storing execution data:', error);
           }
           
-          // Animate nodes sequentially based on execution order
-          for (const nodeId of (result.execution.execution_order || Object.keys(nodeStates))) {
+          // First, set all nodes to running state simultaneously
+          const executionOrder = result.execution.execution_order || Object.keys(nodeStates);
+          const allNodesToUpdate = executionOrder.filter(nodeId => {
             const nodeState = nodeStates[nodeId];
             const node = nodes.find(n => n.id === nodeId);
-            
-            if (node && nodeState) {
-              // Set node to running state
-              setNodeExecutionStates(prev => ({
-                ...prev,
-                [nodeId]: { status: 'running', startTime: Date.now() }
-              }));
+            return node && nodeState;
+          });
+          
+          // Set all nodes to running at once
+          setNodes((nds) =>
+            nds.map((n) => {
+              if (allNodesToUpdate.includes(n.id)) {
+                return {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    executionState: {
+                      status: 'running',
+                      output: 'Executing...',
+                      timestamp: new Date().toISOString()
+                    }
+                  }
+                };
+              }
+              return n;
+            })
+          );
+          
+          // Update execution states
+          allNodesToUpdate.forEach(nodeId => {
+            setNodeExecutionStates(prev => ({
+              ...prev,
+              [nodeId]: { status: 'running', startTime: Date.now() }
+            }));
+          });
+          
+          // Wait a bit for running animation
+          await new Promise(resolve => setTimeout(resolve, 300));
+          
+          // Now update all nodes to completed/error state with proper output extraction
+          // Also check node_results if available (backend returns both node_states and node_results)
+          const nodeResults = result.execution?.node_results || {};
+          
+          console.log('🔄 Updating all nodes with execution results:', {
+            nodeStates: Object.keys(nodeStates),
+            nodeResults: Object.keys(nodeResults),
+            executionOrder: executionOrder
+          });
+          
+          setNodes((nds) =>
+            nds.map((n) => {
+              const nodeState = nodeStates[n.id];
+              const nodeResult = nodeResults[n.id];
               
-              setNodes((nds) =>
-                nds.map((n) =>
-                  n.id === nodeId
-                    ? {
-                        ...n,
-                        data: {
-                          ...n.data,
-                          executionState: {
-                            status: 'running',
-                            output: 'Executing...',
-                            timestamp: new Date().toISOString()
-                          }
-                        }
-                      }
-                    : n
-                )
-              );
-              
-              // Wait a bit for animation (shorter for better UX)
-              await new Promise(resolve => setTimeout(resolve, 200));
-              
-              // Set node to completed/error state
-              setNodeExecutionStates(prev => ({
-                ...prev,
-                [nodeId]: { 
-                  status: nodeState.status,
-                  output: nodeState.output,
-                  error: nodeState.error,
-                  endTime: Date.now()
+              if (nodeState && allNodesToUpdate.includes(n.id)) {
+                // Extract output properly based on node type
+                // Priority: nodeState.output > nodeResult > nodeState
+                let outputToFormat = nodeState.output || nodeResult || nodeState;
+                let formattedOutput = outputToFormat;
+                
+                console.log(`📊 Processing node ${n.id} (${n.data.type}):`, {
+                  hasNodeState: !!nodeState,
+                  hasNodeResult: !!nodeResult,
+                  nodeStateOutput: nodeState.output ? typeof nodeState.output : 'none',
+                  nodeResultType: nodeResult ? typeof nodeResult : 'none'
+                });
+                
+                // For readme-viewer and other output nodes, extract content from nested structure
+                if (n.data.type === 'readme-viewer' && outputToFormat) {
+                  if (typeof outputToFormat === 'object') {
+                    // Try to get content from main.content or main.text
+                    if (outputToFormat.main) {
+                      formattedOutput = outputToFormat.main.content || 
+                                       outputToFormat.main.text || 
+                                       JSON.stringify(outputToFormat.main, null, 2);
+                    } else if (outputToFormat.content) {
+                      formattedOutput = outputToFormat.content;
+                    } else if (outputToFormat.text) {
+                      formattedOutput = outputToFormat.text;
+                    } else {
+                      formattedOutput = JSON.stringify(outputToFormat, null, 2);
+                    }
+                  }
+                } else if (typeof outputToFormat === 'object' && outputToFormat !== null) {
+                  // For other nodes, try to extract meaningful output
+                  if (outputToFormat.main) {
+                    if (typeof outputToFormat.main === 'string') {
+                      formattedOutput = outputToFormat.main;
+                    } else if (outputToFormat.main.content) {
+                      formattedOutput = outputToFormat.main.content;
+                    } else if (outputToFormat.main.text) {
+                      formattedOutput = outputToFormat.main.text;
+                    } else {
+                      formattedOutput = JSON.stringify(outputToFormat.main, null, 2);
+                    }
+                  } else if (outputToFormat.content) {
+                    formattedOutput = outputToFormat.content;
+                  } else if (outputToFormat.text) {
+                    formattedOutput = outputToFormat.text;
+                  } else {
+                    formattedOutput = JSON.stringify(outputToFormat, null, 2);
+                  }
                 }
-              }));
+                
+                return {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    executionState: {
+                      status: nodeState.status,
+                      output: formattedOutput,
+                      error: nodeState.error,
+                      timestamp: nodeState.timestamp || new Date().toISOString(),
+                      startTime: new Date(),
+                      endTime: new Date()
+                    }
+                  }
+                };
+              }
+              return n;
+            })
+          );
+          
+          // Update execution states to completed
+          allNodesToUpdate.forEach(nodeId => {
+            const nodeState = nodeStates[nodeId];
+            setNodeExecutionStates(prev => ({
+              ...prev,
+              [nodeId]: { 
+                status: nodeState.status,
+                output: nodeState.output,
+                error: nodeState.error,
+                endTime: Date.now()
+              }
+            }));
+          });
+          
+          // Add all nodes to execution history
+          allNodesToUpdate.forEach(nodeId => {
+            const nodeState = nodeStates[nodeId];
+            const node = nodes.find(n => n.id === nodeId);
+            if (node && nodeState) {
+              // Use nodeResult if available, otherwise nodeState.output
+              const nodeResult = nodeResults[nodeId];
+              const outputToLog = nodeResult || nodeState.output;
               
-              setNodes((nds) =>
-                nds.map((n) =>
-                  n.id === nodeId
-                    ? {
-                        ...n,
-                        data: {
-                          ...n.data,
-                          executionState: {
-                            status: nodeState.status,
-                            output: nodeState.output,
-                            error: nodeState.error,
-                            timestamp: nodeState.timestamp
-                          }
-                        }
-                      }
-                    : n
-                )
-              );
+              let outputStr = '';
+              if (node.data.type === 'readme-viewer' && outputToLog) {
+                if (typeof outputToLog === 'object' && outputToLog.main) {
+                  outputStr = outputToLog.main.content || 
+                             outputToLog.main.text || 
+                             JSON.stringify(outputToLog.main, null, 2);
+                } else {
+                  outputStr = typeof outputToLog === 'string' ? outputToLog : JSON.stringify(outputToLog, null, 2);
+                }
+              } else {
+                outputStr = typeof outputToLog === 'string' ? outputToLog : JSON.stringify(outputToLog, null, 2);
+              }
               
-              // Add to execution history for logs
               const nodeExecution = {
-                id: Date.now() + Math.random(),
+                id: Date.now() + Math.random() + nodeId,
                 nodeType: node.data.type,
                 nodeName: node.data.label,
                 status: nodeState.status,
                 startTime: new Date(),
                 endTime: new Date(),
                 source: 'workflow',
-                output: typeof nodeState.output === 'string' ? nodeState.output : JSON.stringify(nodeState.output, null, 2),
+                output: outputStr,
                 duration: 100
               };
               
               setExecutionHistory(prev => [nodeExecution, ...prev.slice(0, 49)]);
-              
-              // Show toast for node completion
-              if (nodeState.status === 'completed') {
-                showToast(`✅ ${node.data.label} completed`, 'success', 2000);
-              } else if (nodeState.status === 'error') {
-                showToast(`❌ ${node.data.label} failed: ${nodeState.error}`, 'error', 4000);
-              }
             }
+          });
+          
+          // Show toast for workflow completion
+          const completedNodes = allNodesToUpdate.filter(id => nodeStates[id]?.status === 'completed').length;
+          const errorNodes = allNodesToUpdate.filter(id => nodeStates[id]?.status === 'error').length;
+          if (completedNodes > 0) {
+            showToast(`✅ ${completedNodes} node(s) completed successfully`, 'success', 3000);
+          }
+          if (errorNodes > 0) {
+            showToast(`❌ ${errorNodes} node(s) failed`, 'error', 4000);
           }
         }
 
@@ -3107,6 +3677,335 @@ function WorkflowBuilder() {
                 {isSaved ? 'Saved' : 'Save'}
               </button>
               
+              {/* Get Webhook URL Button - Show if workflow has webhook trigger */}
+              {nodes.some(n => n.data?.type === 'webhook') && currentWorkflowId && (
+                <>
+                  <button
+                    className="header-btn"
+                    onClick={async () => {
+                      setWebhookUrlModalOpen(true);
+                      setWebhookUrlLoading(true);
+                      try {
+                        // Get base URL
+                        const baseUrlData = await apiService.getBaseUrl();
+                        setBaseUrl(baseUrlData.base_url);
+                        
+                        // Get webhook URL
+                        const webhookData = await apiService.getWebhookUrl(currentWorkflowId);
+                        if (webhookData.webhook_url) {
+                          setWebhookUrl(webhookData);
+                        } else {
+                          setWebhookUrl(null);
+                        }
+                      } catch (err) {
+                        console.error('Error fetching webhook URL:', err);
+                        setWebhookUrl(null);
+                      } finally {
+                        setWebhookUrlLoading(false);
+                      }
+                    }}
+                    title="Get Webhook URL"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      color: 'white'
+                    }}
+                  >
+                    <FiLink2 /> Webhook URL
+                  </button>
+                  
+                  {/* Webhook Listener Button */}
+                  <button
+                    className="header-btn"
+                    disabled={!currentWorkflowId}
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      
+                      if (!currentWorkflowId) {
+                        alert('Please save the workflow first before starting a listener');
+                        return;
+                      }
+                      
+                      if (listenerStatus === 'stopped') {
+                        // Start listener
+                        try {
+                          console.log('🚀 Starting webhook listener for workflow:', currentWorkflowId);
+                          const result = await apiService.startWebhookListener(currentWorkflowId);
+                          console.log('✅ Listener started:', result);
+                          setListenerId(result.listener_id);
+                          setListenerStatus('running');
+                          setListenerPanelOpen(true);
+                          setListenerEvents([]);
+                          setListenerRequestCount(0);
+                          
+                          // Small delay before connecting SSE to ensure listener is ready
+                          setTimeout(() => {
+                            // Subscribe to SSE updates
+                            const eventSource = apiService.subscribeToWebhookListener(result.listener_id, (update) => {
+                              console.log('📡 Webhook listener update received:', update);
+                              
+                              if (update.type === 'webhook_request') {
+                                console.log('📥 New webhook request received:', update);
+                                console.log('   Full update object:', JSON.stringify(update, null, 2));
+                                
+                                // Update listener events and count first
+                                setListenerEvents(prev => {
+                                  const newEvents = [update, ...prev].slice(0, 50);
+                                  console.log('📋 Updated events list, count:', newEvents.length);
+                                  return newEvents;
+                                });
+                                setListenerRequestCount(prev => {
+                                  const newCount = prev + 1;
+                                  console.log('🔢 Request count updated to:', newCount);
+                                  return newCount;
+                                });
+                                
+                                // Update nodes with execution results from webhook
+                                // This should happen immediately when execution data is available
+                                if (update.execution?.node_states) {
+                                  console.log('🔄 SSE: Execution data available, updating nodes immediately');
+                                  console.log('🔄 SSE: Updating nodes with execution results');
+                                  console.log('   Execution node_states:', Object.keys(update.execution.node_states));
+                                  console.log('   Execution node_results:', Object.keys(update.execution.node_results || {}));
+                                  console.log('   Execution status:', update.execution.status);
+                                  console.log('   Execution execution_order:', update.execution.execution_order);
+                                  
+                                  setNodes((nds) => {
+                                    console.log('   SSE: Current nodes in state:', nds.map(n => n.id));
+                                    return nds.map((n) => {
+                                      const nodeState = update.execution.node_states[n.id];
+                                      if (nodeState) {
+                                        console.log(`   SSE: Processing node ${n.id} (${n.data.type}):`, {
+                                          status: nodeState.status,
+                                          has_output: !!nodeState.output,
+                                          has_node_result: !!(update.execution.node_results?.[n.id]),
+                                          output_type: nodeState.output ? typeof nodeState.output : 'none',
+                                          nodeState_keys: Object.keys(nodeState)
+                                        });
+                                        
+                                        // Extract output for display
+                                        let formattedOutput = '';
+                                        const nodeResult = nodeState.output || update.execution.node_results?.[n.id];
+                                        
+                                        if (nodeResult) {
+                                          if (typeof nodeResult === 'string') {
+                                            formattedOutput = nodeResult;
+                                          } else if (nodeResult.main) {
+                                            if (typeof nodeResult.main === 'string') {
+                                              formattedOutput = nodeResult.main;
+                                            } else if (nodeResult.main.content) {
+                                              formattedOutput = nodeResult.main.content;
+                                            } else if (nodeResult.main.text) {
+                                              formattedOutput = nodeResult.main.text;
+                                            } else {
+                                              // For webhook trigger, show the full structure
+                                              formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                                            }
+                                          } else if (nodeResult.content) {
+                                            formattedOutput = nodeResult.content;
+                                          } else if (nodeResult.text) {
+                                            formattedOutput = nodeResult.text;
+                                          } else {
+                                            // For webhook trigger node, show the full output structure
+                                            formattedOutput = JSON.stringify(nodeResult, null, 2);
+                                          }
+                                        }
+                                        
+                                        // Special handling for webhook trigger node - show webhook data
+                                        if (n.data.type === 'webhook' && nodeResult && typeof nodeResult === 'object') {
+                                          if (nodeResult.main && typeof nodeResult.main === 'object') {
+                                            // Show webhook payload in a readable format
+                                            const webhookData = nodeResult.main.data || nodeResult.main;
+                                            if (webhookData && webhookData.body) {
+                                              formattedOutput = `Webhook received:\n${JSON.stringify(webhookData.body, null, 2)}`;
+                                            } else {
+                                              formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                                            }
+                                          }
+                                        }
+                                        
+                                        console.log(`   SSE: Node ${n.id} formatted output length:`, formattedOutput.length);
+                                        
+                                        // Update node with execution state
+                                        const executionState = {
+                                          status: nodeState.status || 'completed',
+                                          output: formattedOutput || nodeResult,
+                                          startTime: nodeState.startTime ? new Date(nodeState.startTime) : new Date(),
+                                          endTime: nodeState.endTime ? new Date(nodeState.endTime) : new Date()
+                                        };
+                                        
+                                        console.log(`   SSE: Updating node ${n.id} with execution state:`, executionState.status);
+                                        
+                                        return {
+                                          ...n,
+                                          data: {
+                                            ...n.data,
+                                            executionState: executionState
+                                          }
+                                        };
+                                      } else {
+                                        // Log if node is not in execution results
+                                        if (n.data.type === 'webhook') {
+                                          console.warn(`⚠️ SSE: Webhook trigger node ${n.id} not found in execution node_states`);
+                                          console.warn(`   Available node IDs in execution:`, Object.keys(update.execution.node_states));
+                                        }
+                                      }
+                                      return n;
+                                    });
+                                  });
+                                  
+                                  // Also update localStorage for README viewer
+                                  try {
+                                    const existingData = localStorage.getItem('workflow_execution_data');
+                                    let executionData = existingData ? JSON.parse(existingData) : {
+                                      workflow_id: currentWorkflowId,
+                                      execution_id: update.execution?.execution_id || Date.now().toString(),
+                                      node_states: {},
+                                      node_results: {},
+                                      execution_order: [],
+                                      timestamp: new Date().toISOString()
+                                    };
+                                    
+                                    if (update.execution?.node_states) {
+                                      executionData.node_states = {
+                                        ...executionData.node_states,
+                                        ...update.execution.node_states
+                                      };
+                                    }
+                                    
+                                    if (update.execution?.node_results) {
+                                      executionData.node_results = {
+                                        ...executionData.node_results,
+                                        ...update.execution.node_results
+                                      };
+                                    }
+                                    
+                                    executionData.execution_id = update.execution?.execution_id || executionData.execution_id;
+                                    executionData.timestamp = new Date().toISOString();
+                                    
+                                    localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+                                    console.log('💾 Updated localStorage with execution data');
+                                  } catch (e) {
+                                    console.error('Error updating localStorage:', e);
+                                  }
+                                }
+                              } else if (update.type === 'status_changed') {
+                                console.log('🔄 Status changed:', update.status);
+                                setListenerStatus(update.status);
+                              } else if (update.type === 'status') {
+                                console.log('📊 Status update:', update);
+                                setListenerStatus(update.status);
+                                if (update.request_count !== undefined) {
+                                  setListenerRequestCount(update.request_count);
+                                }
+                              } else if (update.type === 'connected') {
+                                console.log('✅ Connected to listener stream');
+                              } else {
+                                console.log('📨 Other event type:', update.type, update);
+                              }
+                            });
+                            
+                            // Add error handler
+                            eventSource.addEventListener('error', (error) => {
+                              console.error('❌ SSE connection error:', error);
+                              console.error('EventSource readyState:', eventSource.readyState);
+                            });
+                            
+                            // Log connection states
+                            eventSource.addEventListener('open', () => {
+                              console.log('✅ SSE connection opened, readyState:', eventSource.readyState);
+                            });
+                            
+                            setListenerEventSource(eventSource);
+                            console.log('🔌 SSE EventSource created and stored');
+                          }, 500);
+                        } catch (err) {
+                          console.error('Error starting listener:', err);
+                          alert('Failed to start webhook listener: ' + (err.message || 'Unknown error'));
+                        }
+                      } else if (listenerStatus === 'running') {
+                        // Pause listener
+                        try {
+                          await apiService.pauseWebhookListener(listenerId);
+                          setListenerStatus('paused');
+                        } catch (err) {
+                          console.error('Error pausing listener:', err);
+                        }
+                      } else if (listenerStatus === 'paused') {
+                        // Resume listener
+                        try {
+                          await apiService.resumeWebhookListener(listenerId);
+                          setListenerStatus('running');
+                        } catch (err) {
+                          console.error('Error resuming listener:', err);
+                        }
+                      }
+                    }}
+                    title={listenerStatus === 'stopped' ? 'Start Webhook Listener' : listenerStatus === 'running' ? 'Pause Listener' : 'Resume Listener'}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: listenerStatus === 'running' 
+                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                        : listenerStatus === 'paused'
+                        ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
+                        : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
+                      color: 'white',
+                      cursor: currentWorkflowId ? 'pointer' : 'not-allowed',
+                      opacity: currentWorkflowId ? 1 : 0.6
+                    }}
+                  >
+                    {listenerStatus === 'stopped' ? (
+                      <>
+                        <FiRadio /> Start Listener
+                      </>
+                    ) : listenerStatus === 'running' ? (
+                      <>
+                        <FiPause /> Pause
+                      </>
+                    ) : (
+                      <>
+                        <FiPlay /> Resume
+                      </>
+                    )}
+                  </button>
+                  
+                  {/* Stop Listener Button - Show when running or paused */}
+                  {(listenerStatus === 'running' || listenerStatus === 'paused') && (
+                    <button
+                      className="header-btn"
+                      onClick={async () => {
+                        try {
+                          await apiService.stopWebhookListener(listenerId);
+                          setListenerStatus('stopped');
+                          if (listenerEventSource) {
+                            listenerEventSource.close();
+                            setListenerEventSource(null);
+                          }
+                          setListenerPanelOpen(false);
+                        } catch (err) {
+                          console.error('Error stopping listener:', err);
+                        }
+                      }}
+                      title="Stop Listener"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        background: '#ef4444',
+                        color: 'white'
+                      }}
+                    >
+                      <FiSquare /> Stop
+                    </button>
+                  )}
+                </>
+              )}
+              
               <div className="header-menu-container" ref={menuRef}>
                 <button
                   className="header-btn icon-only"
@@ -3397,6 +4296,329 @@ function WorkflowBuilder() {
                     }}
                   >
                     Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Webhook Listener Panel */}
+          {listenerPanelOpen && (listenerStatus === 'running' || listenerStatus === 'paused') && (
+            <div style={{
+              position: 'fixed',
+              bottom: '20px',
+              right: '20px',
+              width: '500px',
+              maxHeight: '600px',
+              backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+              border: `2px solid ${listenerStatus === 'running' ? '#10b981' : '#f59e0b'}`,
+              borderRadius: '12px',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+              zIndex: 1000,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                padding: '16px',
+                borderBottom: `1px solid ${theme === 'dark' ? '#333' : '#e5e7eb'}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                backgroundColor: listenerStatus === 'running' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FiRadio style={{ 
+                    color: listenerStatus === 'running' ? '#10b981' : '#f59e0b',
+                    fontSize: '18px',
+                    animation: listenerStatus === 'running' ? 'pulse 2s infinite' : 'none'
+                  }} />
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: theme === 'dark' ? '#fff' : '#333' }}>
+                    Webhook Listener {listenerStatus === 'running' ? '(Active)' : '(Paused)'}
+                  </h3>
+                </div>
+                <button
+                  onClick={() => setListenerPanelOpen(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: theme === 'dark' ? '#fff' : '#333',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  <FiX />
+                </button>
+              </div>
+              
+              <div style={{
+                padding: '12px',
+                fontSize: '12px',
+                color: theme === 'dark' ? '#aaa' : '#666',
+                borderBottom: `1px solid ${theme === 'dark' ? '#333' : '#e5e7eb'}`
+              }}>
+                <div style={{ marginBottom: '4px' }}>
+                  Requests received: <strong style={{ color: theme === 'dark' ? '#10b981' : '#059669' }}>{listenerRequestCount}</strong>
+                </div>
+                <div style={{ fontSize: '10px', opacity: 0.7 }}>
+                  Workflow: {currentWorkflowId?.substring(0, 8)}... | Listener: {listenerId?.substring(0, 8)}...
+                </div>
+              </div>
+              
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '12px'
+              }}>
+                {listenerEvents.length === 0 ? (
+                  <div style={{
+                    textAlign: 'center',
+                    padding: '40px 20px',
+                    color: theme === 'dark' ? '#666' : '#999'
+                  }}>
+                    <FiRadio style={{ fontSize: '48px', marginBottom: '12px', opacity: 0.3 }} />
+                    <p>Waiting for webhook requests...</p>
+                    <p style={{ fontSize: '11px', marginTop: '8px' }}>
+                      Send a POST request to your webhook URL to see it here
+                    </p>
+                    <p style={{ fontSize: '10px', marginTop: '8px', color: theme === 'dark' ? '#444' : '#ccc' }}>
+                      Listener ID: {listenerId?.substring(0, 8)}...
+                    </p>
+                  </div>
+                ) : (
+                  listenerEvents.map((event, index) => {
+                    return (
+                    <div
+                      key={event.request_id || index}
+                      style={{
+                        marginBottom: '12px',
+                        padding: '12px',
+                        backgroundColor: theme === 'dark' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.05)',
+                        border: `1px solid ${theme === 'dark' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)'}`,
+                        borderRadius: '8px'
+                      }}
+                    >
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '8px'
+                      }}>
+                        <div style={{
+                          fontSize: '11px',
+                          color: theme === 'dark' ? '#93c5fd' : '#3b82f6',
+                          fontWeight: 600
+                        }}>
+                          {new Date(event.timestamp * 1000).toLocaleTimeString()}
+                        </div>
+                        <div style={{
+                          fontSize: '11px',
+                          padding: '2px 8px',
+                          backgroundColor: event.execution?.status === 'completed' ? '#10b981' : '#f59e0b',
+                          color: 'white',
+                          borderRadius: '4px'
+                        }}>
+                          {event.execution?.status || 'processing'}
+                        </div>
+                      </div>
+                      
+                      {event.request && (
+                        <div style={{ marginBottom: '8px' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: theme === 'dark' ? '#fff' : '#333' }}>
+                            Request: {event.request.method} {event.request.path}
+                          </div>
+                          {event.request.body && Object.keys(event.request.body).length > 0 && (
+                            <pre style={{
+                              fontSize: '10px',
+                              padding: '8px',
+                              backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.05)',
+                              borderRadius: '4px',
+                              overflow: 'auto',
+                              maxHeight: '100px',
+                              margin: 0
+                            }}>
+                              {JSON.stringify(event.request.body, null, 2)}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                      
+                      {event.execution?.data && Object.keys(event.execution.data).length > 0 && (
+                        <div>
+                          <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: theme === 'dark' ? '#fff' : '#333' }}>
+                            Output:
+                          </div>
+                          <pre style={{
+                            fontSize: '10px',
+                            padding: '8px',
+                            backgroundColor: theme === 'dark' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(16, 185, 129, 0.05)',
+                            borderRadius: '4px',
+                            overflow: 'auto',
+                            maxHeight: '150px',
+                            margin: 0
+                          }}>
+                            {JSON.stringify(event.execution.data, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Webhook URL Modal */}
+          {webhookUrlModalOpen && (
+            <div className="modal-overlay" onClick={() => setWebhookUrlModalOpen(false)}>
+              <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+                <div className="modal-header">
+                  <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <FiLink2 /> Webhook URL
+                  </h2>
+                  <button className="close-btn" onClick={() => setWebhookUrlModalOpen(false)}>
+                    <FiX />
+                  </button>
+                </div>
+                <div className="modal-body">
+                  {webhookUrlLoading ? (
+                    <div style={{ padding: '40px', textAlign: 'center', color: '#aaa' }}>
+                      <div style={{
+                        display: 'inline-block',
+                        width: '40px',
+                        height: '40px',
+                        border: '4px solid #444',
+                        borderTopColor: '#3b82f6',
+                        borderRadius: '50%',
+                        animation: 'spin 1s linear infinite',
+                        marginBottom: '12px'
+                      }}></div>
+                      <p>Loading webhook URL...</p>
+                    </div>
+                  ) : webhookUrl?.webhook_url ? (
+                    <div>
+                      <div style={{ marginBottom: '20px' }}>
+                        <label style={{ 
+                          display: 'block', 
+                          marginBottom: '8px', 
+                          fontWeight: 600, 
+                          fontSize: '14px',
+                          color: '#fff'
+                        }}>
+                          Your Webhook URL
+                        </label>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            value={webhookUrl.webhook_url}
+                            readOnly
+                            style={{
+                              flex: 1,
+                              padding: '12px',
+                              backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                              border: '1px solid rgba(59, 130, 246, 0.3)',
+                              borderRadius: '6px',
+                              color: '#fff',
+                              fontSize: '13px',
+                              fontFamily: 'monospace'
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(webhookUrl.webhook_url);
+                              setWebhookUrlCopied(true);
+                              setTimeout(() => setWebhookUrlCopied(false), 2000);
+                            }}
+                            style={{
+                              padding: '12px 20px',
+                              backgroundColor: webhookUrlCopied ? '#10b981' : '#3b82f6',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontWeight: '500',
+                              transition: 'all 0.2s'
+                            }}
+                            title="Copy webhook URL"
+                          >
+                            {webhookUrlCopied ? (
+                              <>
+                                <FiCheck /> Copied!
+                              </>
+                            ) : (
+                              <>
+                                <FiCopy /> Copy
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div style={{
+                        padding: '16px',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: '8px',
+                        marginBottom: '16px'
+                      }}>
+                        <div style={{ marginBottom: '12px' }}>
+                          <strong style={{ color: '#3b82f6', fontSize: '13px' }}>Workflow Info:</strong>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#aaa', lineHeight: '1.8' }}>
+                          <div><strong>Workflow:</strong> {webhookUrl.workflow_name}</div>
+                          <div><strong>Method:</strong> {webhookUrl.method || 'POST'}</div>
+                          <div><strong>Path:</strong> {webhookUrl.webhook_path}</div>
+                          {baseUrl && (
+                            <div><strong>Base URL:</strong> {baseUrl}</div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div style={{
+                        padding: '12px',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        color: '#6ee7b7'
+                      }}>
+                        <strong>💡 Usage:</strong> Use this URL to trigger your workflow from:
+                        <ul style={{ marginTop: '8px', marginLeft: '20px', lineHeight: '1.8' }}>
+                          <li>External services (n8n, Zapier, etc.)</li>
+                          <li>Page Builder workflow trigger buttons</li>
+                          <li>API clients (Postman, curl, etc.)</li>
+                          <li>Custom integrations</li>
+                        </ul>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{
+                      padding: '40px',
+                      textAlign: 'center',
+                      color: '#fca5a5'
+                    }}>
+                      <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+                      <h3 style={{ marginBottom: '8px', color: '#fff' }}>No Webhook Trigger Found</h3>
+                      <p style={{ color: '#aaa', fontSize: '14px' }}>
+                        This workflow does not have a webhook trigger node. 
+                        Add a "Webhook" trigger node to get a webhook URL.
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  <button 
+                    className="modal-btn primary" 
+                    onClick={() => setWebhookUrlModalOpen(false)}
+                    style={{ width: '100%' }}
+                  >
+                    Close
                   </button>
                 </div>
               </div>

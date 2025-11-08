@@ -37,6 +37,13 @@ export const outputNodes = {
         default: 'Content Viewer',
         placeholder: 'Enter a title for the content',
         description: 'Title to display above the content'
+      },
+      content: {
+        type: 'textarea',
+        label: 'Content',
+        default: 'work',
+        placeholder: 'Enter content to display (or leave empty to use input data)',
+        description: 'Default content to display. If input data is provided, it will override this.'
       }
     }
   })
