@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { FiSettings, FiLoader, FiPlay, FiTrash2, FiCopy, FiMessageCircle } from 'react-icons/fi';
+import { FiLoader, FiPlay, FiTrash2, FiCopy, FiMessageCircle } from 'react-icons/fi';
 import { BsCheckCircle, BsXCircle } from 'react-icons/bs';
 import { nodeTypeDefinitions } from '../../nodeTypes.jsx';
 
@@ -32,6 +32,11 @@ const WorkflowNode = ({ data, selected, id }) => {
           .filter(([key, prop]) => prop.required);
         
         for (const [key, prop] of requiredProps) {
+          // Special case for AI Agent: if System Message (prompt) has content, don't show error
+          if (data.type === 'ai-agent' && key === 'prompt' && properties[key] && properties[key].trim() !== '') {
+            continue; // Skip validation if prompt has content
+          }
+          
           if (!properties[key] || properties[key] === '') {
             return { valid: false, error: `Missing: ${prop.label}` };
           }
@@ -114,13 +119,6 @@ const WorkflowNode = ({ data, selected, id }) => {
       );
     }
     return null;
-  };
-
-  const handleSettingsClick = (e) => {
-    e.stopPropagation();
-    if (data.onSettingsClick) {
-      data.onSettingsClick(id);
-    }
   };
 
   const handleExecutionClick = (e) => {
@@ -363,13 +361,6 @@ const WorkflowNode = ({ data, selected, id }) => {
           title="View Output"
         >
           <FiPlay />
-        </button>
-        <button 
-          className="node-action-btn" 
-          onClick={handleSettingsClick}
-          title="Settings"
-        >
-          <FiSettings />
         </button>
       </div>
 

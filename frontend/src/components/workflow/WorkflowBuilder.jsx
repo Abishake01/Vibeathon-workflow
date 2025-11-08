@@ -70,7 +70,6 @@ function WorkflowBuilder() {
     
     return types;
   }, []); // Empty dependency array since nodeTypeDefinitions and components don't change
-  const [selectedNodeForSettings, setSelectedNodeForSettings] = useState(null);
   const [nodeSettingsModalOpen, setNodeSettingsModalOpen] = useState(false);
   const [selectedNodeForModal, setSelectedNodeForModal] = useState(null);
   const [libraryOpen, setLibraryOpen] = useState(true);
@@ -197,7 +196,7 @@ function WorkflowBuilder() {
     }
     
     // Wait for handlers to be defined
-    if (!handlersRef.current.handleSettingsClick) {
+    if (!handlersRef.current.handleExecutionClick) {
       return; // Handlers not ready yet
     }
     
@@ -232,7 +231,7 @@ function WorkflowBuilder() {
             label: node.data?.label || 'Node',
             type: node.data?.type || node.type,
             properties: node.data?.properties || {},
-            onSettingsClick: handlersRef.current.handleSettingsClick,
+            onSettingsClick: undefined,
             onExecutionClick: handlersRef.current.handleExecutionClick,
             onDelete: handlersRef.current.deleteNode,
             onDuplicate: handlersRef.current.duplicateNode,
@@ -501,15 +500,10 @@ function WorkflowBuilder() {
     [nodes, edges, saveToHistory]
   );
 
-  const handleSettingsClick = useCallback((nodeId) => {
-    const node = nodes.find(n => n.id === nodeId);
-    setSelectedNodeForSettings(node);
-  }, [nodes]);
-  
   // Update handlers ref when handlers are defined
   useEffect(() => {
-    handlersRef.current.handleSettingsClick = handleSettingsClick;
-  }, [handleSettingsClick]);
+    handlersRef.current.handleSettingsClick = null;
+  }, []);
 
   const handleExecutionClick = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
@@ -834,10 +828,11 @@ function WorkflowBuilder() {
     setEdges((eds) => eds.filter(
       (edge) => edge.source !== nodeId && edge.target !== nodeId
     ));
-    if (selectedNodeForSettings?.id === nodeId) {
-      setSelectedNodeForSettings(null);
+    if (selectedNodeForModal?.id === nodeId) {
+      setSelectedNodeForModal(null);
+      setNodeSettingsModalOpen(false);
     }
-  }, [nodes, edges, selectedNodeForSettings, saveToHistory]);
+  }, [nodes, edges, selectedNodeForModal, saveToHistory]);
 
   const handleChatExecution = useCallback((executionData) => {
     const newExecution = {
@@ -878,6 +873,11 @@ function WorkflowBuilder() {
             .filter(([key, prop]) => prop.required);
           
           for (const [key, prop] of requiredProps) {
+            // Special case for AI Agent: if System Message (prompt) has content, don't show error
+            if (node.data.type === 'ai-agent' && key === 'prompt' && properties[key] && properties[key].trim() !== '') {
+              continue; // Skip validation if prompt has content
+            }
+            
             if (!properties[key] || properties[key] === '') {
               invalidNodes.push({ id: node.id, label: node.data.label, error: `Missing: ${prop.label}` });
               break;
@@ -1137,7 +1137,7 @@ function WorkflowBuilder() {
       data: {
         ...nodeToDuplicate.data,
         label: `${nodeToDuplicate.data.label} (Copy)`,
-        onSettingsClick: handleSettingsClick,
+        onSettingsClick: undefined,
         onExecutionClick: handleExecutionClick,
         onDelete: deleteNode,
         onDuplicate: duplicateNode,
@@ -1147,7 +1147,7 @@ function WorkflowBuilder() {
     };
 
     setNodes((nds) => [...nds, newNode]);
-  }, [nodes, handleSettingsClick, handleExecutionClick, deleteNode, handleChatExecution]);
+  }, [nodes, handleExecutionClick, deleteNode, handleChatExecution]);
 
   const handleClearHistory = useCallback(() => {
     setExecutionHistory([]);
@@ -1184,7 +1184,7 @@ function WorkflowBuilder() {
             data: {
               ...node.data,
               executionState: executionState.nodeStates[node.id],
-              onSettingsClick: handleSettingsClick,
+              onSettingsClick: undefined,
               onExecutionClick: handleExecutionClick,
               onDelete: deleteNode,
               onDuplicate: duplicateNode,
@@ -1216,7 +1216,7 @@ function WorkflowBuilder() {
     });
 
     return unsubscribe;
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
 
   // Undo function - defined after all handlers
   const undo = useCallback(() => {
@@ -1229,7 +1229,7 @@ function WorkflowBuilder() {
           ...node,
           data: {
             ...node.data,
-            onSettingsClick: handleSettingsClick,
+            onSettingsClick: undefined,
             onExecutionClick: handleExecutionClick,
             onDelete: deleteNode,
             onDuplicate: duplicateNode,
@@ -1243,7 +1243,7 @@ function WorkflowBuilder() {
         showToast('↶ Undone', 'info', 1500);
       }
     }
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast]);
   
   // Redo function - defined after all handlers
   const redo = useCallback(() => {
@@ -1256,7 +1256,7 @@ function WorkflowBuilder() {
           ...node,
           data: {
             ...node.data,
-            onSettingsClick: handleSettingsClick,
+            onSettingsClick: undefined,
             onExecutionClick: handleExecutionClick,
             onDelete: deleteNode,
             onDuplicate: duplicateNode,
@@ -1270,17 +1270,16 @@ function WorkflowBuilder() {
         showToast('↷ Redone', 'info', 1500);
       }
     }
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast]);
 
   // Update all handlers ref when they're all defined
   useEffect(() => {
-    handlersRef.current.handleSettingsClick = handleSettingsClick;
     handlersRef.current.handleExecutionClick = handleExecutionClick;
     handlersRef.current.deleteNode = deleteNode;
     handlersRef.current.duplicateNode = duplicateNode;
     handlersRef.current.handleChatClick = handleChatClick;
     handlersRef.current.handleChatExecution = handleChatExecution;
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
   
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -1316,7 +1315,6 @@ function WorkflowBuilder() {
         ...node,
         data: {
           ...node.data,
-          onSettingsClick: handleSettingsClick,
           onExecutionClick: handleExecutionClick,
           onDelete: deleteNode,
           onDuplicate: duplicateNode,
@@ -1325,7 +1323,7 @@ function WorkflowBuilder() {
         }
       }))
     );
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
 
   const onDragOver = useCallback((event) => {
     event.preventDefault();
@@ -1364,7 +1362,7 @@ function WorkflowBuilder() {
           label: label,
           type: type,
           properties: {},
-          onSettingsClick: handleSettingsClick,
+          onSettingsClick: undefined,
           onExecutionClick: handleExecutionClick,
           onDelete: deleteNode,
           onDuplicate: duplicateNode,
@@ -1374,7 +1372,7 @@ function WorkflowBuilder() {
 
       setNodes((nds) => nds.concat(newNode));
     },
-    [nodes, edges, reactFlowInstance, handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, hasExistingTrigger, saveToHistory]
+    [nodes, edges, reactFlowInstance, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, hasExistingTrigger, saveToHistory]
   );
 
   const addNodeFromLibrary = useCallback((nodeType, nodeDef) => {
@@ -1395,7 +1393,7 @@ function WorkflowBuilder() {
         label: nodeDef.name,
         type: nodeType,
         properties: {},
-        onSettingsClick: handleSettingsClick,
+        onSettingsClick: undefined,
         onExecutionClick: handleExecutionClick,
         onDelete: deleteNode,
         onDuplicate: duplicateNode,
@@ -1405,7 +1403,7 @@ function WorkflowBuilder() {
     };
 
     setNodes((nds) => nds.concat(newNode));
-  }, [nodes, edges, handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, hasExistingTrigger, saveToHistory]);
+  }, [nodes, edges, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, hasExistingTrigger, saveToHistory]);
 
   const updateNodeData = useCallback((nodeId, newData) => {
     setNodes((nds) =>
@@ -1416,9 +1414,9 @@ function WorkflowBuilder() {
       )
     );
     
-    // Update selected node as well
-    if (selectedNodeForSettings?.id === nodeId) {
-      setSelectedNodeForSettings(prev => {
+    // Update selected node in modal as well
+    if (selectedNodeForModal?.id === nodeId) {
+      setSelectedNodeForModal(prev => {
         if (!prev) return null;
         return {
           ...prev,
@@ -1426,17 +1424,18 @@ function WorkflowBuilder() {
         };
       });
     }
-  }, [selectedNodeForSettings]);
+  }, [selectedNodeForModal]);
 
   const deleteSelectedNode = useCallback(() => {
-    if (selectedNodeForSettings) {
-      setNodes((nds) => nds.filter((node) => node.id !== selectedNodeForSettings.id));
+    if (selectedNodeForModal) {
+      setNodes((nds) => nds.filter((node) => node.id !== selectedNodeForModal.id));
       setEdges((eds) => eds.filter(
-        (edge) => edge.source !== selectedNodeForSettings.id && edge.target !== selectedNodeForSettings.id
+        (edge) => edge.source !== selectedNodeForModal.id && edge.target !== selectedNodeForModal.id
       ));
-      setSelectedNodeForSettings(null);
+      setSelectedNodeForModal(null);
+      setNodeSettingsModalOpen(false);
     }
-  }, [selectedNodeForSettings]);
+  }, [selectedNodeForModal]);
 
   const executeWorkflow = useCallback(async () => {
     if (nodes.length === 0) {
@@ -1465,6 +1464,11 @@ function WorkflowBuilder() {
             .filter(([key, prop]) => prop.required);
           
           for (const [key, prop] of requiredProps) {
+            // Special case for AI Agent: if System Message (prompt) has content, don't show error
+            if (node.data.type === 'ai-agent' && key === 'prompt' && properties[key] && properties[key].trim() !== '') {
+              continue; // Skip validation if prompt has content
+            }
+            
             if (!properties[key] || properties[key] === '') {
               invalidNodes.push({ id: node.id, label: node.data.label, error: `Missing: ${prop.label}` });
               break;
@@ -1910,7 +1914,7 @@ function WorkflowBuilder() {
             ...node,
             data: {
               ...node.data,
-              onSettingsClick: handleSettingsClick,
+              onSettingsClick: undefined,
               onExecutionClick: handleExecutionClick,
               onDelete: deleteNode,
               onDuplicate: duplicateNode,
@@ -1993,7 +1997,7 @@ function WorkflowBuilder() {
             ...node,
             data: {
               ...node.data,
-              onSettingsClick: handleSettingsClick,
+              onSettingsClick: undefined,
               onExecutionClick: handleExecutionClick,
               onDelete: deleteNode,
               onDuplicate: duplicateNode,
@@ -2026,7 +2030,7 @@ function WorkflowBuilder() {
       showToast(`❌ Import failed: ${error.message}`, 'error');
       throw error;
     }
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast]);
 
   const openImportModal = useCallback(() => {
     setImportModalOpen(true);
@@ -2062,7 +2066,7 @@ function WorkflowBuilder() {
         label: 'Notes',
         type: 'notes',
         content: '# Notes\n\nAdd your notes here...\n\n## Features\n- Markdown support\n- Edit inline\n- Save automatically',
-        onSettingsClick: handleSettingsClick,
+        onSettingsClick: undefined,
         onExecutionClick: handleExecutionClick,
         onDelete: deleteNode,
         onDuplicate: duplicateNode,
@@ -2086,7 +2090,7 @@ function WorkflowBuilder() {
     });
     setFlowKey(prev => prev + 1); // Force re-render
     showToast('📝 Notes node added! Click to edit content.', 'success', 3000);
-  }, [nodes, edges, handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast, saveToHistory]);
+  }, [nodes, edges, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution, showToast, saveToHistory]);
 
   const loadWorkflow = useCallback(() => {
     const input = document.createElement('input');
@@ -2115,7 +2119,7 @@ function WorkflowBuilder() {
               ...node,
               data: {
                 ...node.data,
-                onSettingsClick: handleSettingsClick,
+                onSettingsClick: undefined,
                 onExecutionClick: handleExecutionClick,
                 onDelete: deleteNode,
                 onDuplicate: duplicateNode,
@@ -2143,7 +2147,7 @@ function WorkflowBuilder() {
     };
     
     input.click();
-  }, [handleSettingsClick, handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
+  }, [handleExecutionClick, deleteNode, duplicateNode, handleChatClick, handleChatExecution]);
 
   return (
     <div className={`app ${logsExpanded ? 'logs-expanded' : ''} ${aiChatbotOpen ? 'ai-chatbot-open' : ''}`}>
@@ -2378,25 +2382,16 @@ function WorkflowBuilder() {
         ) : null}
       </div>
 
-      {selectedNodeForSettings && (
-        <PropertyPanel
-          node={selectedNodeForSettings}
-          onUpdate={updateNodeData}
-          onClose={() => setSelectedNodeForSettings(null)}
-        />
-      )}
-
-      {nodeSettingsModalOpen && selectedNodeForModal && (
+      {selectedNodeForModal && (
         <NodeSettingsModal
           node={selectedNodeForModal}
-          nodes={nodes}
-          edges={edges}
+          isOpen={nodeSettingsModalOpen}
           onUpdate={updateNodeData}
           onClose={() => {
             setNodeSettingsModalOpen(false);
             setSelectedNodeForModal(null);
           }}
-          onExecuteNode={handleExecutionClick}
+          onExecute={handleExecutionClick}
         />
       )}
 
