@@ -1250,3 +1250,243 @@ def get_node_execution_data(request):
         return Response({
             'error': f'Failed to get node execution data: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([])  # Allow without authentication for now
+@permission_classes([AllowAny])  # Allow access without authentication
+def generate_ui_code(request):
+    """Generate UI code using AI based on description or existing HTML"""
+    try:
+        data = request.data
+        mode = data.get('mode', 'generate')  # 'generate' or 'edit'
+        description = data.get('description', '')
+        existing_html = data.get('existing_html', '')
+        existing_css = data.get('existing_css', '')
+        existing_js = data.get('existing_js', '')
+        settings = data.get('settings', {})
+        
+        # Use settings from request or fallback to environment variables
+        api_key = settings.get('apiKey') or os.getenv('GROQ_API_KEY')
+        model = settings.get('model') or 'llama-3.1-8b-instant'
+        base_url = settings.get('baseUrl') or 'https://api.groq.com/openai/v1'
+        
+        if not api_key:
+            return Response({
+                'error': 'API key is required. Please configure your AI settings.',
+                'html': '',
+                'css': '',
+                'js': ''
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            from alith import Agent
+        except ImportError:
+            return Response({
+                'error': 'AI service dependencies not available',
+                'html': '',
+                'css': '',
+                'js': ''
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        
+        # Create agent
+        try:
+            agent = Agent(
+                name="ui-code-generator",
+                model=model,
+                api_key=api_key,
+                base_url=base_url
+            )
+        except Exception as e:
+            return Response({
+                'error': f'Failed to create AI agent: {str(e)}',
+                'html': '',
+                'css': '',
+                'js': ''
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        
+        # Build prompt based on mode
+        if mode == 'edit':
+            # Edit existing code
+            prompt = f"""You are an expert web developer. Edit the following HTML/CSS/JS code based on the user's description.
+
+User's request: {description}
+
+Current HTML:
+{existing_html}
+
+Current CSS:
+{existing_css}
+
+Current JS:
+{existing_js}
+
+Please provide:
+1. Updated HTML code (only the HTML, no explanations)
+2. Updated CSS code (only the CSS, no explanations)
+3. Updated JS code (only the JavaScript, no explanations)
+
+Format your response as:
+HTML:
+[your HTML code here]
+
+CSS:
+[your CSS code here]
+
+JS:
+[your JavaScript code here]
+
+Make sure to:
+- Use Tailwind CSS classes for styling
+- Keep the code clean and well-structured
+- Maintain semantic HTML
+- Ensure responsive design
+- Only return the code, no markdown formatting or code blocks"""
+        else:
+            # Generate new code
+            prompt = f"""You are an expert web developer. Generate modern, responsive HTML/CSS/JS code based on the following description.
+
+Description: {description}
+
+Please provide:
+1. HTML code (only the HTML, no explanations)
+2. CSS code (only the CSS, no explanations)
+3. JavaScript code (only the JavaScript, no explanations)
+
+Format your response as:
+HTML:
+[your HTML code here]
+
+CSS:
+[your CSS code here]
+
+JS:
+[your JavaScript code here]
+
+Requirements:
+- Use Tailwind CSS classes for styling (via CDN: https://cdn.tailwindcss.com)
+- Create modern, responsive design
+- Use semantic HTML5 elements
+- Ensure accessibility
+- Make it visually appealing
+- Only return the code, no markdown formatting or code blocks"""
+        
+        try:
+            # Get AI response
+            response = agent.prompt(prompt)
+            
+            # Parse response to extract HTML, CSS, and JS
+            html_code = ''
+            css_code = ''
+            js_code = ''
+            
+            # Try to parse the response - improved parsing
+            lines = response.split('\n')
+            current_section = None
+            current_code = []
+            
+            for line in lines:
+                line_stripped = line.strip()
+                line_lower = line_stripped.lower()
+                
+                # Check for section headers (more flexible matching)
+                if line_lower.startswith('html:') or line_lower == 'html':
+                    # Save previous section if exists
+                    if current_section and current_code:
+                        code_text = '\n'.join(current_code).strip()
+                        if current_section == 'html':
+                            html_code = code_text
+                        elif current_section == 'css':
+                            css_code = code_text
+                        elif current_section == 'js':
+                            js_code = code_text
+                    # Start new HTML section
+                    current_section = 'html'
+                    current_code = []
+                    # Skip the header line itself
+                    continue
+                elif line_lower.startswith('css:') or line_lower == 'css':
+                    # Save previous section if exists
+                    if current_section and current_code:
+                        code_text = '\n'.join(current_code).strip()
+                        if current_section == 'html':
+                            html_code = code_text
+                        elif current_section == 'css':
+                            css_code = code_text
+                        elif current_section == 'js':
+                            js_code = code_text
+                    # Start new CSS section
+                    current_section = 'css'
+                    current_code = []
+                    # Skip the header line itself
+                    continue
+                elif line_lower.startswith('js:') or line_lower.startswith('javascript:') or line_lower == 'js' or line_lower == 'javascript':
+                    # Save previous section if exists
+                    if current_section and current_code:
+                        code_text = '\n'.join(current_code).strip()
+                        if current_section == 'html':
+                            html_code = code_text
+                        elif current_section == 'css':
+                            css_code = code_text
+                        elif current_section == 'js':
+                            js_code = code_text
+                    # Start new JS section
+                    current_section = 'js'
+                    current_code = []
+                    # Skip the header line itself
+                    continue
+                elif current_section:
+                    # Add line to current section (only if we're in a section)
+                    current_code.append(line)
+            
+            # Handle last section
+            if current_section and current_code:
+                code_text = '\n'.join(current_code).strip()
+                if current_section == 'html':
+                    html_code = code_text
+                elif current_section == 'css':
+                    css_code = code_text
+                elif current_section == 'js':
+                    js_code = code_text
+            
+            # If parsing failed, try to extract from code blocks
+            if not html_code and not css_code and not js_code:
+                import re
+                # Try to find code blocks
+                html_match = re.search(r'```html\s*\n(.*?)\n```', response, re.DOTALL)
+                css_match = re.search(r'```css\s*\n(.*?)\n```', response, re.DOTALL)
+                js_match = re.search(r'```(?:js|javascript)\s*\n(.*?)\n```', response, re.DOTALL)
+                
+                if html_match:
+                    html_code = html_match.group(1).strip()
+                if css_match:
+                    css_code = css_match.group(1).strip()
+                if js_match:
+                    js_code = js_match.group(1).strip()
+            
+            # If still no code, use the entire response as HTML
+            if not html_code and not css_code and not js_code:
+                html_code = response.strip()
+            
+            return Response({
+                'html': html_code,
+                'css': css_code,
+                'js': js_code,
+                'raw_response': response
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                'error': f'AI response generation failed: {str(e)}',
+                'html': '',
+                'css': '',
+                'js': ''
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            
+    except Exception as e:
+        return Response({
+            'error': f'Code generation failed: {str(e)}',
+            'html': '',
+            'css': '',
+            'js': ''
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

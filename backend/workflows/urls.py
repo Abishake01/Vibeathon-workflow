@@ -10,7 +10,8 @@ from .views import (
     export_workflow, get_exported_workflow, get_available_memory_types,
     test_memory_connection, get_memory_statistics,
     save_custom_widget, get_custom_widgets, delete_custom_widget,
-    get_dynamic_nodes, get_dynamic_tools, get_node_execution_data
+    get_dynamic_nodes, get_dynamic_tools, get_node_execution_data,
+    generate_ui_code
 )
 from .auth_views import signup, signin, signout, get_current_user, check_auth, get_csrf_token
 from .ui_builder_views import UIBuilderProjectViewSet
@@ -61,6 +62,9 @@ urlpatterns = [
     path('dynamic-nodes/', get_dynamic_nodes, name='get-dynamic-nodes'),
     path('dynamic-tools/', get_dynamic_tools, name='get-dynamic-tools'),
     path('node-execution-data/', get_node_execution_data, name='get-node-execution-data'),
+    
+    # UI Code Generation endpoint
+    path('generate-ui-code/', generate_ui_code, name='generate-ui-code'),
     
     # Router URLs
     path('', include(router.urls)),

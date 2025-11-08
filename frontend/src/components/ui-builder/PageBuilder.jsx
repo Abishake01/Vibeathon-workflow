@@ -13,7 +13,11 @@ import {
   FiSun, 
   FiMoon,
   FiFile,
-  FiImage
+  FiImage,
+  FiEdit3,
+  FiZap,
+  FiX,
+  FiSettings
 } from 'react-icons/fi';
 import StudioEditor from '@grapesjs/studio-sdk/react';
 import '@grapesjs/studio-sdk/style';
@@ -47,6 +51,22 @@ function PageBuilder() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const { toggleTheme } = useTheme();
+  
+  // AI Edit Modal state
+  const [showAIEditModal, setShowAIEditModal] = useState(false);
+  const [selectedComponent, setSelectedComponent] = useState(null);
+  const [aiMode, setAiMode] = useState('generate'); // 'generate' or 'edit'
+  const [aiDescription, setAiDescription] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  
+  // AI Settings Modal state
+  const [showAISettingsModal, setShowAISettingsModal] = useState(false);
+  const [aiSettings, setAiSettings] = useState({
+    apiKey: '',
+    model: 'llama-3.1-8b-instant',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    llmProvider: 'groq'
+  });
   
   // Keep ref in sync with state
   useEffect(() => {
@@ -292,6 +312,33 @@ function PageBuilder() {
         setIsSaved(false);
       }
     });
+    
+    // Listen for component selection to show AI edit options
+    const handleComponentSelect = () => {
+      const selected = editorInstance.getSelected();
+      if (selected && selected.length > 0) {
+        // Get the first selected component
+        setSelectedComponent(selected[0]);
+      } else {
+        setSelectedComponent(null);
+      }
+    };
+    
+    // Listen for component selection events
+    editorInstance.on('component:selected', (component) => {
+      setSelectedComponent(component);
+    });
+    
+    editorInstance.on('component:deselected', () => {
+      setSelectedComponent(null);
+    });
+    
+    // Also listen for selection changes via the selection manager
+    editorInstance.on('component:update', handleComponentSelect);
+    editorInstance.on('component:add', handleComponentSelect);
+    
+    // Check initial selection
+    setTimeout(handleComponentSelect, 500);
   }, [autoSaveEnabled, loadCustomWidgets, serverProjectId]);
 
   const handleLoadProject = useCallback((project) => {
@@ -609,6 +656,453 @@ function PageBuilder() {
     }
   }, [currentProject]);
 
+  // Load AI settings from localStorage on mount
+  useEffect(() => {
+    const savedSettings = localStorage.getItem('ai-chatbot-settings');
+    if (savedSettings) {
+      try {
+        const settings = JSON.parse(savedSettings);
+        setAiSettings({
+          apiKey: settings.apiKey || '',
+          model: settings.model || 'llama-3.1-8b-instant',
+          baseUrl: settings.baseUrl || 'https://api.groq.com/openai/v1',
+          llmProvider: settings.llmProvider || 'groq'
+        });
+      } catch (e) {
+        console.error('Error loading AI settings:', e);
+      }
+    }
+  }, []);
+
+  // Save AI settings
+  const handleSaveAISettings = useCallback(() => {
+    if (!aiSettings.apiKey.trim()) {
+      alert('Please enter an API key.');
+      return;
+    }
+    
+    // Save to localStorage
+    localStorage.setItem('ai-chatbot-settings', JSON.stringify(aiSettings));
+    
+    // Also update state to ensure it's in sync
+    setAiSettings({ ...aiSettings });
+    
+    setShowAISettingsModal(false);
+    
+    // Show success notification
+    const notification = document.createElement('div');
+    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
+    notification.textContent = '✓ AI settings saved successfully!';
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), 3000);
+    
+    console.log('💾 AI settings saved:', { 
+      hasApiKey: !!aiSettings.apiKey, 
+      model: aiSettings.model,
+      provider: aiSettings.llmProvider 
+    });
+  }, [aiSettings]);
+
+  // Listen for custom events from GrapesJS toolbar
+  useEffect(() => {
+    const handleAIEditEvent = (event) => {
+      const { component, mode } = event.detail;
+      setSelectedComponent(component);
+      setAiMode(mode);
+      if (mode === 'edit') {
+        setAiDescription('Improve the design and make it more modern');
+      } else {
+        setAiDescription('');
+      }
+      setShowAIEditModal(true);
+    };
+    
+    window.addEventListener('gjs-open-ai-edit', handleAIEditEvent);
+    return () => {
+      window.removeEventListener('gjs-open-ai-edit', handleAIEditEvent);
+    };
+  }, []);
+
+  // Handle opening AI edit modal (defined before useEffect that uses it)
+  const handleOpenAIEdit = useCallback((mode) => {
+    if (!selectedComponent) {
+      alert('Please select a component first by clicking on it in the canvas.');
+      return;
+    }
+    
+    setAiMode(mode);
+    setShowAIEditModal(true);
+    
+    // Pre-fill description for edit mode
+    if (mode === 'edit') {
+      setAiDescription('Improve the design and make it more modern');
+    } else {
+      setAiDescription('');
+    }
+  }, [selectedComponent]);
+
+
+  // Handle AI code generation
+  const handleGenerateCode = useCallback(async () => {
+    if (!aiDescription.trim() && aiMode === 'generate') {
+      alert('Please provide a description for code generation.');
+      return;
+    }
+    
+    if (!editor || !selectedComponent) {
+      alert('Please select a component first.');
+      return;
+    }
+    
+    // Check if AI settings are configured
+    const savedSettings = localStorage.getItem('ai-chatbot-settings');
+    if (!savedSettings) {
+      const shouldConfigure = confirm('AI settings are not configured. Would you like to configure them now?');
+      if (shouldConfigure) {
+        setShowAISettingsModal(true);
+        return;
+      } else {
+        return;
+      }
+    }
+    
+    let settings = {};
+    try {
+      settings = JSON.parse(savedSettings);
+    } catch (e) {
+      console.error('Error parsing AI settings:', e);
+    }
+    
+    if (!settings.apiKey) {
+      const shouldConfigure = confirm('API key is missing. Would you like to configure AI settings now?');
+      if (shouldConfigure) {
+        setShowAISettingsModal(true);
+        return;
+      } else {
+        alert('API key is required to generate code. Please configure your AI settings.');
+        return;
+      }
+    }
+    
+    setIsGenerating(true);
+    
+    try {
+      // Reload settings from localStorage to ensure we have the latest
+      const latestSettings = JSON.parse(localStorage.getItem('ai-chatbot-settings') || '{}');
+      
+      // Use settings from localStorage (most up-to-date) or state as fallback
+      const finalSettings = {
+        apiKey: latestSettings.apiKey || settings.apiKey || aiSettings.apiKey || '',
+        model: latestSettings.model || settings.model || aiSettings.model || 'llama-3.1-8b-instant',
+        baseUrl: latestSettings.baseUrl || settings.baseUrl || aiSettings.baseUrl || 'https://api.groq.com/openai/v1',
+        llmProvider: latestSettings.llmProvider || settings.llmProvider || aiSettings.llmProvider || 'groq'
+      };
+      
+      // Double-check API key
+      if (!finalSettings.apiKey || !finalSettings.apiKey.trim()) {
+        const shouldConfigure = confirm('API key is missing. Would you like to configure AI settings now?');
+        if (shouldConfigure) {
+          setShowAISettingsModal(true);
+          setIsGenerating(false);
+          return;
+        } else {
+          setIsGenerating(false);
+          alert('API key is required to generate code. Please configure your AI settings.');
+          return;
+        }
+      }
+      
+      console.log('🔑 Using API settings:', { 
+        hasApiKey: !!finalSettings.apiKey, 
+        model: finalSettings.model,
+        provider: finalSettings.llmProvider 
+      });
+      
+      // Get existing component code
+      let existingHtml = '';
+      let existingCss = '';
+      let existingJs = '';
+      
+      if (aiMode === 'edit' && selectedComponent) {
+        try {
+          // Get full HTML including all nested components
+          existingHtml = selectedComponent.toHTML({ 
+            withAttributes: true,
+            cleanId: false 
+          }) || '';
+          
+          // Also try to get inner HTML if toHTML doesn't work well
+          if (!existingHtml || existingHtml.trim().length === 0) {
+            try {
+              const innerHtml = selectedComponent.getInnerHTML();
+              if (innerHtml) {
+                existingHtml = innerHtml;
+              }
+            } catch (e) {
+              console.warn('Could not get inner HTML:', e);
+            }
+          }
+          
+          // Try to extract CSS from component styles
+          try {
+            const styles = selectedComponent.getStyle();
+            if (styles && Object.keys(styles).length > 0) {
+              existingCss = Object.entries(styles)
+                .map(([prop, value]) => `${prop}: ${value};`)
+                .join(' ');
+            }
+          } catch (e) {
+            console.warn('Could not extract CSS:', e);
+          }
+          
+          console.log('📝 Extracted existing HTML:', existingHtml.substring(0, 100) + '...');
+        } catch (e) {
+          console.warn('Could not extract existing code:', e);
+        }
+      }
+      
+      // Call backend API
+      const response = await apiService.request('/generate-ui-code/', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: aiMode,
+          description: aiDescription,
+          existing_html: existingHtml,
+          existing_css: existingCss,
+          existing_js: existingJs,
+          settings: finalSettings
+        })
+      });
+      
+      if (response.error) {
+        alert(`Error: ${response.error}`);
+        return;
+      }
+      
+      // Combine HTML, CSS, and JS
+      let componentContent = response.html || '';
+      
+      if (response.css) {
+        const cssContent = response.css.trim();
+        if (cssContent && !cssContent.startsWith('<style')) {
+          componentContent = `<style>${cssContent}</style>${componentContent}`;
+        } else if (cssContent) {
+          componentContent = `${cssContent}${componentContent}`;
+        }
+      }
+      
+      if (response.js) {
+        const jsContent = response.js.trim();
+        if (jsContent && !jsContent.startsWith('<script')) {
+          componentContent = `${componentContent}<script>${jsContent}</script>`;
+        } else if (jsContent) {
+          componentContent = `${componentContent}${jsContent}`;
+        }
+      }
+      
+      // Update the selected component properly with undo/redo support
+      if (selectedComponent && editor) {
+        try {
+          console.log('🔄 Updating component:', selectedComponent.get('type'));
+          
+          // Store the current state for undo (before making changes)
+          const currentContent = selectedComponent.toHTML();
+          const parent = selectedComponent.parent();
+          
+          // Clean componentContent to remove duplicate IDs
+          let cleanContent = componentContent;
+          try {
+            // Remove any existing IDs from the generated HTML to avoid conflicts
+            cleanContent = cleanContent.replace(/\s+id=["'][^"']*["']/gi, '');
+            // Also remove any script tags that might have duplicate variable declarations
+            cleanContent = cleanContent.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, (match) => {
+              // Keep script tags but ensure they don't have duplicate declarations
+              return match.replace(/(const|let|var)\s+(\w+)\s*=/g, (m, decl, name) => {
+                // Add unique suffix to variable names to avoid conflicts
+                return `${decl} ${name}_${Date.now()} =`;
+              });
+            });
+          } catch (cleanError) {
+            console.warn('Could not clean content, using as-is:', cleanError);
+          }
+          
+          // Method: Simple direct update (most reliable)
+          try {
+            // Get components collection
+            const components = selectedComponent.components();
+            
+            // Clear existing components first
+            if (components) {
+              try {
+                // Try to remove all child components
+                const compsArray = [];
+                components.each((comp) => {
+                  compsArray.push(comp);
+                });
+                
+                // Remove each component
+                compsArray.forEach((comp) => {
+                  try {
+                    comp.remove();
+                  } catch (e) {
+                    // Ignore errors
+                  }
+                });
+              } catch (clearError) {
+                console.log('Could not clear components, continuing:', clearError);
+              }
+            }
+            
+            // Set new content - GrapesJS will parse and create components
+            selectedComponent.components(cleanContent);
+            selectedComponent.set('content', cleanContent);
+            
+            console.log('✅ Component updated (direct method)');
+            
+          } catch (updateError) {
+            console.log('Direct update failed, using simple content set:', updateError);
+            // Fallback: Just set content
+            try {
+              selectedComponent.set('content', cleanContent);
+            } catch (e) {
+              console.error('All update methods failed:', e);
+            }
+          }
+          
+          // Get the updated component
+          const updatedComponent = editor.getSelected() || selectedComponent;
+          
+          // Trigger component update events
+          try {
+            updatedComponent.trigger('change:content');
+            updatedComponent.trigger('change');
+            updatedComponent.trigger('update');
+            editor.trigger('component:update', updatedComponent);
+            editor.trigger('component:change', updatedComponent);
+          } catch (e) {
+            console.warn('Error triggering events:', e);
+          }
+          
+          // Force immediate editor refresh
+          editor.refresh();
+          
+          // Force canvas refresh using multiple strategies
+          const forceCanvasRefresh = () => {
+            try {
+              // Always refresh editor first
+              editor.refresh();
+              
+              // Get canvas
+              const canvas = editor.Canvas.getFrameEl();
+              if (canvas && canvas.contentDocument) {
+                const canvasDoc = canvas.contentDocument;
+                const canvasWindow = canvas.contentWindow;
+                
+                // Update component view directly
+                try {
+                  const compView = updatedComponent.getView && updatedComponent.getView();
+                  if (compView) {
+                    // Force re-render of the component view
+                    if (compView.render) {
+                      compView.render();
+                    }
+                    if (compView.update) {
+                      compView.update();
+                    }
+                    // Update the DOM element directly if available
+                    if (compView.el) {
+                      compView.el.innerHTML = updatedComponent.toHTML();
+                    }
+                  }
+                } catch (viewError) {
+                  console.log('View update error:', viewError);
+                }
+                
+                // Trigger events
+                if (canvasWindow) {
+                  try {
+                    canvasWindow.dispatchEvent(new Event('resize', { bubbles: true }));
+                  } catch (e) {}
+                }
+                
+                if (canvasDoc.body) {
+                  try {
+                    canvasDoc.body.dispatchEvent(new Event('DOMContentLoaded', { bubbles: true }));
+                  } catch (e) {}
+                }
+                
+                // Ensure Tailwind is loaded
+                try {
+                  const head = canvasDoc.head || canvasDoc.getElementsByTagName('head')[0];
+                  if (head) {
+                    let tailwindScript = canvasDoc.querySelector('script[src*="tailwindcss"]');
+                    if (!tailwindScript) {
+                      const script = canvasDoc.createElement('script');
+                      script.src = 'https://cdn.tailwindcss.com';
+                      script.async = false;
+                      head.appendChild(script);
+                    }
+                  }
+                } catch (e) {}
+              }
+              
+              // Trigger editor events
+              try {
+                editor.trigger('canvas:update');
+                editor.trigger('update');
+                editor.trigger('canvas:frame:load');
+              } catch (e) {}
+              
+            } catch (e) {
+              console.warn('Error in canvas refresh:', e);
+              editor.refresh();
+            }
+          };
+          
+          // Immediate refresh
+          forceCanvasRefresh();
+          
+          // Additional refreshes with delays to ensure visibility
+          setTimeout(forceCanvasRefresh, 100);
+          setTimeout(forceCanvasRefresh, 250);
+          setTimeout(forceCanvasRefresh, 500);
+          setTimeout(forceCanvasRefresh, 1000);
+          
+          console.log('✅ Component updated successfully');
+        } catch (error) {
+          console.error('Error updating component:', error);
+          // Final fallback: simple content update
+          try {
+            selectedComponent.set('content', componentContent);
+            editor.refresh();
+            console.log('✅ Component updated (simple fallback)');
+          } catch (finalError) {
+            console.error('Update failed completely:', finalError);
+            alert('Component updated. If changes are not visible, try refreshing the page.');
+          }
+        }
+      }
+      
+      // Show success notification
+      const notification = document.createElement('div');
+      notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
+      notification.textContent = `✓ Code ${aiMode === 'edit' ? 'updated' : 'generated'} successfully!`;
+      document.body.appendChild(notification);
+      setTimeout(() => notification.remove(), 3000);
+      
+      // Close modal and reset
+      setShowAIEditModal(false);
+      setAiDescription('');
+      setAiMode('generate');
+      
+    } catch (error) {
+      console.error('Error generating code:', error);
+      alert(`Error generating code: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [editor, selectedComponent, aiMode, aiDescription]);
+
   return (
     <div className="app" style={{ width: '100%', height: '100vh' }}>
       <div className="main-content">
@@ -742,6 +1236,18 @@ function PageBuilder() {
               >
                 {theme === 'light' ? <FiMoon /> : <FiSun />}
               </button>
+              
+              <button
+                className="header-btn icon-only"
+                onClick={() => setShowAISettingsModal(true)}
+                title="AI Settings"
+                style={{ 
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white'
+                }}
+              >
+                <FiSettings />
+              </button>
             </div>
           </div>
         </div>
@@ -858,6 +1364,40 @@ function PageBuilder() {
                     leftContainer: { 
                       buttons: ({ items }) => [
                         ...items,
+                        {
+                          id: 'ai-edit',
+                          label: '',
+                          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>',
+                          onClick: ({ editor }) => {
+                            const selected = editor.getSelected();
+                            if (selected) {
+                              window.dispatchEvent(new CustomEvent('gjs-open-ai-edit', {
+                                detail: { component: selected, mode: 'edit' }
+                              }));
+                            } else {
+                              alert('Please select a component first by clicking on it in the canvas.');
+                            }
+                          },
+                          className: 'ai-edit-toolbar-btn',
+                          attributes: { 'data-id': 'ai-edit', 'title': 'Edit with AI' }
+                        },
+                        {
+                          id: 'ai-generate',
+                          label: '',
+                          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+                          onClick: ({ editor }) => {
+                            const selected = editor.getSelected();
+                            if (selected) {
+                              window.dispatchEvent(new CustomEvent('gjs-open-ai-edit', {
+                                detail: { component: selected, mode: 'generate' }
+                              }));
+                            } else {
+                              alert('Please select a component first by clicking on it in the canvas.');
+                            }
+                          },
+                          className: 'ai-generate-toolbar-btn',
+                          attributes: { 'data-id': 'ai-generate', 'title': 'Generate with AI' }
+                        },
                         {
                           id: 'save-project',
                           label: 'Save',
@@ -1302,6 +1842,94 @@ function PageBuilder() {
             fsLightboxComponent?.init({
               block: { category: 'Advanced', label: 'Image Gallery' }
             }),
+            // Plugin to add AI edit buttons to component toolbar and floating button
+            (editor) => {
+              editor.onReady(() => {
+                console.log('🤖 AI Edit plugin initialized');
+                
+                // Create a function to open AI edit modal
+                const openAIEditModal = (mode) => {
+                  const selected = editor.getSelected();
+                  console.log('🤖 Opening AI edit modal, mode:', mode, 'selected:', selected);
+                  if (selected) {
+                    // Use a custom event to communicate with React component
+                    window.dispatchEvent(new CustomEvent('gjs-open-ai-edit', {
+                      detail: { component: selected, mode }
+                    }));
+                  } else {
+                    alert('Please select a component first by clicking on it in the canvas.');
+                  }
+                };
+                
+                // Register commands first
+                editor.Commands.add('ai-edit', {
+                  run: () => openAIEditModal('edit')
+                });
+                
+                editor.Commands.add('ai-generate', {
+                  run: () => openAIEditModal('generate')
+                });
+                
+                // Create floating AI edit button
+                let floatingButton = null;
+                
+                const createFloatingButton = () => {
+                  // Remove existing button if any
+                  if (floatingButton) {
+                    floatingButton.remove();
+                  }
+                  
+                  // Create floating button
+                  floatingButton = document.createElement('div');
+                  floatingButton.id = 'gjs-ai-edit-floating-btn';
+                  
+                  const btn = document.createElement('button');
+                  btn.className = 'gjs-ai-edit-btn';
+                  btn.title = 'Edit with AI';
+                  btn.innerHTML = `
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                  `;
+                  
+                  // Add click handler
+                  btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openAIEditModal('edit');
+                  });
+                  
+                  floatingButton.appendChild(btn);
+                  
+                  // Initially hide the button
+                  floatingButton.style.display = 'none';
+                  document.body.appendChild(floatingButton);
+                };
+                
+                // Show/hide floating button based on selection
+                const updateFloatingButton = () => {
+                  const selected = editor.getSelected();
+                  if (floatingButton) {
+                    if (selected && selected.get('type') !== 'wrapper') {
+                      floatingButton.style.display = 'block';
+                    } else {
+                      floatingButton.style.display = 'none';
+                    }
+                  }
+                };
+                
+                // Create button on ready
+                createFloatingButton();
+                
+                // Update button visibility on selection changes
+                editor.on('component:selected', updateFloatingButton);
+                editor.on('component:deselected', updateFloatingButton);
+                editor.on('component:update', updateFloatingButton);
+                
+                // Initial check
+                setTimeout(updateFloatingButton, 500);
+              });
+            },
             // Plugin to ensure Tailwind CSS and all styles are loaded in all pages and canvas
             (editor) => {
               // Function to inject Tailwind CSS and ensure all styles are loaded
@@ -1739,6 +2367,308 @@ function PageBuilder() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* AI Edit Modal */}
+        {showAIEditModal && (
+          <div className="import-modal-overlay" onClick={() => setShowAIEditModal(false)}>
+            <div className="import-modal-container" onClick={(e) => e.stopPropagation()}>
+              <div className="import-modal-header">
+                <h2>
+                  {aiMode === 'edit' ? (
+                    <>
+                      <FiEdit3 style={{ display: 'inline', marginRight: '8px' }} />
+                      Edit with AI
+                    </>
+                  ) : (
+                    <>
+                      <FiZap style={{ display: 'inline', marginRight: '8px' }} />
+                      Generate with AI
+                    </>
+                  )}
+                </h2>
+                <button className="import-modal-close" onClick={() => setShowAIEditModal(false)}>
+                  <FiX />
+                </button>
+              </div>
+              <div className="import-modal-body">
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: '600', 
+                    color: theme === 'dark' ? '#fff' : '#333' 
+                  }}>
+                    {aiMode === 'edit' ? 'Describe how you want to edit this component:' : 'Describe what you want to generate:'}
+                  </label>
+                  <textarea
+                    className="import-textarea"
+                    placeholder={
+                      aiMode === 'edit' 
+                        ? "e.g., Make it more modern with gradient backgrounds and rounded corners"
+                        : "e.g., A hero section with a call-to-action button and animated background"
+                    }
+                    value={aiDescription}
+                    onChange={(e) => setAiDescription(e.target.value)}
+                    rows={6}
+                    style={{
+                      width: '100%',
+                      padding: '12px',
+                      borderRadius: '6px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333',
+                      fontFamily: 'inherit',
+                      fontSize: '14px',
+                      resize: 'vertical'
+                    }}
+                  />
+                </div>
+                
+                {isGenerating && (
+                  <div style={{
+                    padding: '20px',
+                    textAlign: 'center',
+                    color: theme === 'dark' ? '#aaa' : '#666'
+                  }}>
+                    <div style={{
+                      display: 'inline-block',
+                      width: '40px',
+                      height: '40px',
+                      border: `4px solid ${theme === 'dark' ? '#444' : '#e5e7eb'}`,
+                      borderTopColor: '#3b82f6',
+                      borderRadius: '50%',
+                      animation: 'spin 1s linear infinite',
+                      marginBottom: '12px'
+                    }}></div>
+                    <p>Generating code with AI...</p>
+                  </div>
+                )}
+              </div>
+              <div className="import-modal-footer">
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setShowAIEditModal(false);
+                    setAiDescription('');
+                  }}
+                  disabled={isGenerating}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: theme === 'dark' ? '#444' : '#e0e0e0',
+                    color: theme === 'dark' ? '#fff' : '#333',
+                    cursor: isGenerating ? 'not-allowed' : 'pointer',
+                    fontWeight: '500',
+                    opacity: isGenerating ? 0.5 : 1
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={handleGenerateCode}
+                  disabled={!aiDescription.trim() || isGenerating}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: (!aiDescription.trim() || isGenerating)
+                      ? (theme === 'dark' ? '#444' : '#ccc')
+                      : (theme === 'dark' ? '#a855f7' : '#7c3aed'),
+                    color: '#fff',
+                    cursor: (!aiDescription.trim() || isGenerating) ? 'not-allowed' : 'pointer',
+                    fontWeight: '600',
+                    opacity: (!aiDescription.trim() || isGenerating) ? 0.6 : 1
+                  }}
+                >
+                  {isGenerating ? 'Generating...' : (aiMode === 'edit' ? 'Update Component' : 'Generate Code')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AI Settings Modal */}
+        {showAISettingsModal && createPortal(
+          <div className="import-modal-overlay" onClick={() => setShowAISettingsModal(false)}>
+            <div className="import-modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+              <div className="import-modal-header">
+                <h2>
+                  <FiSettings style={{ display: 'inline', marginRight: '8px' }} />
+                  AI Settings
+                </h2>
+                <button className="import-modal-close" onClick={() => setShowAISettingsModal(false)}>
+                  <FiX />
+                </button>
+              </div>
+              <div className="import-modal-body">
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    API Key <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={aiSettings.apiKey}
+                    onChange={(e) => setAiSettings({ ...aiSettings, apiKey: e.target.value })}
+                    placeholder="Enter your API key (e.g., Groq, OpenAI)"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      fontFamily: 'monospace',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  />
+                  <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280' }}>
+                    Your API key is stored locally and never sent to our servers.
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    LLM Provider
+                  </label>
+                  <select
+                    value={aiSettings.llmProvider}
+                    onChange={(e) => {
+                      const provider = e.target.value;
+                      setAiSettings({
+                        ...aiSettings,
+                        llmProvider: provider,
+                        baseUrl: provider === 'groq' 
+                          ? 'https://api.groq.com/openai/v1'
+                          : provider === 'openai'
+                          ? 'https://api.openai.com/v1'
+                          : aiSettings.baseUrl
+                      });
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  >
+                    <option value="groq">Groq</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    Model
+                  </label>
+                  <select
+                    value={aiSettings.model}
+                    onChange={(e) => setAiSettings({ ...aiSettings, model: e.target.value })}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  >
+                    <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant (Groq)</option>
+                    <option value="llama-3.1-70b-versatile">Llama 3.1 70B Versatile (Groq)</option>
+                    <option value="mixtral-8x7b-32768">Mixtral 8x7B (Groq)</option>
+                    <option value="gpt-4">GPT-4 (OpenAI)</option>
+                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo (OpenAI)</option>
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ 
+                    display: 'block', 
+                    marginBottom: '8px', 
+                    fontWeight: 600, 
+                    fontSize: '14px',
+                    color: theme === 'dark' ? '#fff' : '#333'
+                  }}>
+                    Base URL
+                  </label>
+                  <input
+                    type="text"
+                    value={aiSettings.baseUrl}
+                    onChange={(e) => setAiSettings({ ...aiSettings, baseUrl: e.target.value })}
+                    placeholder="https://api.groq.com/openai/v1"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333'
+                    }}
+                  />
+                  <p style={{ marginTop: '6px', fontSize: '12px', color: theme === 'dark' ? '#888' : '#6b7280' }}>
+                    API endpoint URL for your LLM provider.
+                  </p>
+                </div>
+              </div>
+              <div className="import-modal-footer">
+                <button 
+                  onClick={() => setShowAISettingsModal(false)}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: theme === 'dark' ? '#444' : '#e0e0e0',
+                    color: theme === 'dark' ? '#fff' : '#333',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleSaveAISettings}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Save Settings
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
       </div>
     </div>
