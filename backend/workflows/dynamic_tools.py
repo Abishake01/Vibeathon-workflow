@@ -17,6 +17,7 @@ class DynamicTool:
     description: str
     handler: Callable
     parameters: Dict[str, Any]
+    category: str = "Custom"
     version: str = "1.0.0"
     author: str = "Agent Flow"
 
@@ -32,6 +33,7 @@ class DynamicToolRegistry:
         tool_id: str,
         name: str,
         description: str,
+        category: str = "Custom",
         version: str = "1.0.0",
         author: str = "Agent Flow"
     ):
@@ -46,6 +48,7 @@ class DynamicToolRegistry:
                 description=description,
                 handler=func,
                 parameters=parameters,
+                category=category,
                 version=version,
                 author=author
             )
@@ -111,6 +114,7 @@ class DynamicToolRegistry:
                 'id': tool.id,
                 'name': tool.name,
                 'description': tool.description,
+                'category': tool.category,
                 'parameters': {
                     name: {
                         'type': str(type_info[0].__name__) if hasattr(type_info[0], '__name__') else 'string',
