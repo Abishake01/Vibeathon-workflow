@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@grapesjs/studio-sdk": "^1.0.56",
+    "@grapesjs/studio-sdk-plugins": "^1.0.29"
+  }
+}

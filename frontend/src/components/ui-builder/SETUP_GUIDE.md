@@ -1,262 +1,609 @@
-# UI Builder - Setup & Usage Guide
+# GrapesJS Studio SDK Setup Guide
 
-## 🚀 Quick Start
+Complete guide to setting up and configuring the GrapesJS Studio SDK Page Builder.
 
-The UI Builder is a drag-and-drop page builder integrated into your workflow application. It allows authenticated users to create responsive web pages visually.
+## Prerequisites
 
-## ✅ Prerequisites
+- Node.js 16+ and npm/yarn
+- React 18+
+- Basic knowledge of React and JSX
 
-1. **GrapesJS Installation** (Already done ✓)
-   ```bash
-   npm install grapesjs grapesjs/dist/css/grapes.min.css
-   ```
+## Installation
 
-2. **User Authentication** (Required)
-   - Users must be logged in to access the page builder
-   - Each user has their own isolated workspace
-   - Projects are saved per user
+### Step 1: Install Dependencies
 
-## 🎯 How to Access
-
-### From Workflow Builder
-1. Login to your account
-2. Click on "Page Builder" tab in the toolbar (top of the screen)
-3. The UI Builder will load with drag-and-drop components
-
-### Direct Navigation
-- The router automatically switches between Workflow Builder and Page Builder
-- Your active tab is saved in localStorage
-
-## 🎨 Using the Page Builder
-
-### 1. **Blocks Panel (Left)**
-   - **Basic Blocks**: Text, headings, images, buttons, links
-   - **Layout Blocks**: Containers, sections, columns, grids
-   - **Form Blocks**: Inputs, textareas, forms, buttons
-   - **Media Blocks**: Videos, images, galleries, audio
-   - **Advanced Blocks**: Navbars, heroes, footers, CTAs
-
-### 2. **Canvas (Center)**
-   - Drag blocks from the left panel to the canvas
-   - Click elements to select them
-   - Drag to reposition elements
-   - Use device switcher (Desktop/Tablet/Mobile) to preview responsiveness
-
-### 3. **Properties Panel (Right)**
-   - **Component Tab**: Edit element properties (ID, classes, attributes)
-   - **Styles Tab**: Edit CSS styles visually (colors, fonts, spacing, etc.)
-
-## 📝 Creating Your First Page
-
-### Step-by-Step:
-
-1. **Add a Container**
-   - Drag "Container" block from Layout category
-   - This creates a responsive wrapper
-
-2. **Add Content**
-   - Drag "Heading" from Basic blocks
-   - Drag "Paragraph" for text content
-   - Drag "Button" for call-to-action
-
-3. **Style Elements**
-   - Click any element to select it
-   - Use the Properties panel to change colors, fonts, spacing
-   - Preview on different devices using the toolbar buttons
-
-4. **Save Your Work**
-   - Click "Save" in the toolbar
-   - Projects auto-save every few seconds
-   - Name your project in the input field
-
-## 💾 Project Management
-
-### Saving Projects
-- **Auto-save**: Enabled by default (saves to localStorage)
-- **Manual Save**: Click "Save" button in toolbar
-- **Project Name**: Click the project name to rename
-
-### Loading Projects
-1. Click "Projects" button in toolbar
-2. Browse your saved projects
-3. Click a project to load it
-4. Search and sort by date/name
-
-### Exporting Code
-1. Click "Export" button
-2. Choose export type:
-   - **HTML Only**: Just the HTML content
-   - **HTML + CSS**: HTML with embedded styles
-   - **Full Package**: HTML, CSS, and JavaScript
-3. Copy or download the code
-
-## 🎨 Importing Widgets
-
-### Import Custom HTML/CSS/JS Components:
-
-1. Click "Import" button in toolbar
-2. **Drag and Drop** files or click to browse:
-   - HTML files (.html, .htm)
-   - CSS files (.css)
-   - JavaScript files (.js)
-
-3. **Upload Images**:
-   - Click "Upload Images" button
-   - Select image files
-   - Images are uploaded to server with custom names
-   - Image URLs are automatically replaced in HTML
-
-4. **Add External Resources**:
-   - Add external scripts (CDN URLs)
-   - Add external stylesheets
-   - Automatic Tailwind CSS detection
-
-5. **Import Widget**:
-   - Widget is added to "Custom" block category
-   - Drag from blocks panel to canvas
-
-## 🖼️ Image Management
-
-### Uploading Images:
-1. Open Widget Import modal (Import button)
-2. Click "Upload Images"
-3. Select images from your computer
-4. Enter custom names (optional)
-5. Images are stored per user on the server
-
-### Using Images:
-- Images get unique URLs on the server
-- Reference them in HTML: `<img src="[IMAGE:filename.jpg]">`
-- Or use direct URLs from the upload response
-
-## 📱 Responsive Design
-
-### Device Preview:
-- **Desktop** (default): Full width
-- **Tablet**: 768px width
-- **Mobile**: 375px width
-
-### Making Elements Responsive:
-1. Select an element
-2. Switch to Tablet/Mobile view
-3. Adjust styles for that device
-4. GrapesJS applies media queries automatically
-
-## 🎭 Theme Support
-
-- **Light Mode**: Clean, bright interface
-- **Dark Mode**: Easy on the eyes
-- Toggle with sun/moon icon in toolbar
-- Your preference is saved
-
-## 🔐 User Isolation
-
-### How It Works:
-- Each user has a unique workspace
-- Projects are saved per user (in localStorage and server)
-- Uploaded images are stored in user-specific folders:
-  - `ui_assets/user_{user_id}/`
-- Guest users (unauthenticated) use `ui_assets/user_guest/`
-
-### Security:
-- Asset uploads validate file types (images only)
-- File names are sanitized automatically
-- User cannot access other users' assets
-
-## 🛠️ Troubleshooting
-
-### Blocks Not Appearing?
-1. Open browser console (F12)
-2. Look for errors like:
-   - `❌ No blocks found!`
-   - `❌ GrapesJS containers not found`
-3. Check that all block files exist in `blocks/` folder
-4. Refresh the page (Ctrl+R or Cmd+R)
-
-### Drag-and-Drop Not Working?
-1. Check console for errors
-2. Ensure GrapesJS is loaded: Look for `✅ GrapesJS initialized`
-3. Make sure you're clicking and holding on blocks
-4. Try refreshing the page
-
-### Images Not Uploading?
-1. Check file size (< 10MB recommended)
-2. Verify file type (jpg, png, gif, svg, webp)
-3. Check console for server errors
-4. Ensure backend is running
-
-### Can't Save Projects?
-1. Check if you're logged in
-2. Try manual save (click Save button)
-3. Check browser console for errors
-4. Clear localStorage if corrupted: `localStorage.clear()`
-
-## 📊 Performance Tips
-
-### For Large Projects:
-1. Use "Save" button periodically (don't rely only on auto-save)
-2. Export projects as JSON backups
-3. Optimize images before uploading
-4. Remove unused custom widgets
-
-### Best Practices:
-- Use containers for layout structure
-- Keep nesting depth reasonable (< 10 levels)
-- Test on all device sizes before exporting
-- Name elements clearly for easier editing
-
-## 🚦 Backend Setup
-
-### Required Django Settings:
-
-```python
-# settings.py
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
-
-# Allow larger file uploads
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10485760  # 10MB
+```bash
+npm install @grapesjs/studio-sdk @grapesjs/studio-sdk-plugins
 ```
 
-### URL Configuration:
+Or with yarn:
+```bash
+yarn add @grapesjs/studio-sdk @grapesjs/studio-sdk-plugins
+```
 
-```python
-# workflows/urls.py
-from .asset_views import upload_asset, list_assets, delete_asset
+### Step 2: Import Required Packages
 
-urlpatterns = [
-    # ... other URLs
-    path('ui-assets/upload/', upload_asset, name='upload-asset'),
-    path('ui-assets/', list_assets, name='list-assets'),
-    path('ui-assets/<str:filename>/', delete_asset, name='delete-asset'),
+In your component:
+```javascript
+import StudioEditor from '@grapesjs/studio-sdk/react';
+import '@grapesjs/studio-sdk/style';
+import {
+  dialogComponent,
+  tableComponent,
+  listPagesComponent,
+  fsLightboxComponent
+} from '@grapesjs/studio-sdk-plugins';
+```
+
+### Step 3: Basic Setup
+
+Create a basic page builder component:
+```jsx
+import StudioEditor from '@grapesjs/studio-sdk/react';
+import '@grapesjs/studio-sdk/style';
+
+function PageBuilder() {
+  return (
+    <div style={{ width: '100vw', height: '100vh' }}>
+      <StudioEditor
+        options={{
+          project: {
+            type: 'web',
+            default: {
+              pages: [
+                {
+                  name: 'Home',
+                  component: '<h1>Hello World</h1>'
+                }
+              ]
+            }
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+export default PageBuilder;
+```
+
+## Configuration
+
+### Complete Configuration Example
+
+```jsx
+<StudioEditor
+  options={{
+    // Theme
+    theme: 'light',
+    customTheme: {
+      default: {
+        colors: {
+          global: {
+            background1: '#f4f4f4',
+            background2: '#fdfdfd',
+            background3: '#ffffff',
+            text: '#181818'
+          },
+          primary: {
+            background1: 'hsl(258 90% 66%)',
+            text: '#ffffff'
+          }
+        }
+      }
+    },
+
+    // Project
+    project: {
+      type: 'web',
+      default: {
+        pages: [
+          {
+            id: 'home',
+            name: 'Home',
+            component: '<h1>Home Page</h1>'
+          }
+        ]
+      }
+    },
+
+    // Layout
+    layout: {
+      default: {
+        type: 'row',
+        style: { height: '100%' },
+        children: [
+          {
+            type: 'sidebarLeft',
+            children: {
+              type: 'tabs',
+              value: 'blocks',
+              tabs: [
+                {
+                  id: 'blocks',
+                  label: 'Blocks',
+                  children: { type: 'panelBlocks' }
+                },
+                {
+                  id: 'layers',
+                  label: 'Layers',
+                  children: { type: 'panelLayers' }
+                }
+              ]
+            }
+          },
+          { type: 'canvasSidebarTop' },
+          {
+            type: 'sidebarRight',
+            children: {
+              type: 'tabs',
+              value: 'styles',
+              tabs: [
+                {
+                  id: 'styles',
+                  label: 'Styles',
+                  children: {
+                    type: 'column',
+                    children: [
+                      { type: 'panelSelectors' },
+                      { type: 'panelStyles' }
+                    ]
+                  }
+                },
+                {
+                  id: 'props',
+                  label: 'Properties',
+                  children: { type: 'panelProperties' }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    // Blocks
+    blocks: {
+      default: [
+        {
+          id: 'my-block',
+          label: 'My Block',
+          category: 'Custom',
+          content: '<div>My Content</div>'
+        }
+      ]
+    },
+
+    // Global Styles
+    globalStyles: {
+      default: [
+        {
+          id: 'primaryColor',
+          property: 'color',
+          field: 'color',
+          defaultValue: '#3b82f6',
+          selector: ':root',
+          label: 'Primary Color'
+        }
+      ]
+    },
+
+    // Pages
+    pages: {
+      add: ({ editor, rename }) => {
+        const page = editor.Pages.add({
+          name: 'New Page',
+          component: '<div>New Page</div>'
+        }, { select: true });
+        rename(page);
+      }
+    },
+
+    // Assets
+    assets: {
+      storageType: 'self',
+      onUpload: async ({ files }) => {
+        return files.map(file => ({
+          id: URL.createObjectURL(file),
+          src: URL.createObjectURL(file),
+          name: file.name,
+          mimeType: file.type,
+          size: file.size
+        }));
+      }
+    },
+
+    // Plugins
+    plugins: [
+      dialogComponent.init({ block: { category: 'Extra' } }),
+      tableComponent.init({ block: { category: 'Extra' } }),
+      editor => {
+        editor.onReady(() => {
+          console.log('Editor ready!');
+        });
+      }
+    ]
+  }}
+/>
+```
+
+## Advanced Features
+
+### 1. Editor Events
+
+```javascript
+plugins: [
+  editor => {
+    editor.onReady(() => {
+      console.log('Editor is ready');
+    });
+
+    editor.on('update', () => {
+      console.log('Project updated');
+    });
+
+    editor.on('component:selected', (component) => {
+      console.log('Component selected:', component);
+    });
+  }
 ]
 ```
 
-## 🎓 Video Tutorials
+### 2. Auto-Save
 
-### Coming Soon:
-- [ ] Drag and drop basics
-- [ ] Building a landing page
-- [ ] Creating responsive layouts
-- [ ] Importing custom widgets
-- [ ] Exporting and deploying
+```javascript
+const [editor, setEditor] = useState(null);
 
-## 📞 Support
+plugins: [
+  editorInstance => {
+    editorInstance.onReady(() => {
+      setEditor(editorInstance);
+      
+      editorInstance.on('update', () => {
+        const projectData = editorInstance.getProjectData();
+        localStorage.setItem('project', JSON.stringify(projectData));
+      });
+    });
+  }
+]
+```
 
-If you encounter issues:
-1. Check the console (F12) for error messages
-2. Review this guide's troubleshooting section
-3. Check that all dependencies are installed
-4. Ensure backend is running and accessible
+### 3. Custom Toolbar Button
 
-## 🎉 What's Next?
+```javascript
+layout: {
+  default: {
+    children: [
+      {
+        type: 'canvasSidebarTop',
+        sidebarTop: {
+          leftContainer: {
+            buttons: ({ items }) => [
+              ...items,
+              {
+                id: 'save',
+                label: 'Save',
+                icon: '<svg>...</svg>',
+                onClick: ({ editor }) => {
+                  const data = editor.getProjectData();
+                  localStorage.setItem('project', JSON.stringify(data));
+                  alert('Saved!');
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}
+```
 
-### Advanced Features:
-- Custom component creation
-- JavaScript interactions
-- API integrations
-- Dynamic content from workflows
-- Real-time collaboration (planned)
+### 4. Template System
 
-Happy building! 🚀
+```javascript
+templates: {
+  onLoad: async () => {
+    // Fetch from API
+    const response = await fetch('/api/templates');
+    const templates = await response.json();
+    
+    return templates.map(t => ({
+      id: t.id,
+      name: t.name,
+      thumbnail: t.thumbnail,
+      data: t.projectData
+    }));
+  }
+}
+```
 
+### 5. Custom Blocks with JavaScript
+
+```javascript
+blocks: {
+  default: [
+    {
+      id: 'interactive-button',
+      label: 'Interactive Button',
+      category: 'Components',
+      content: {
+        type: 'button',
+        content: 'Click Me',
+        script: function() {
+          this.addEventListener('click', function() {
+            alert('Button clicked!');
+          });
+        }
+      }
+    }
+  ]
+}
+```
+
+## Integration Examples
+
+### With React Router
+
+```jsx
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import PageBuilder from './PageBuilder';
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/builder" element={<PageBuilder />} />
+        <Route path="/builder/:projectId" element={<PageBuilder />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+```
+
+### With Backend API
+
+```jsx
+function PageBuilder() {
+  const [projectData, setProjectData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const projectId = useParams().projectId;
+
+  useEffect(() => {
+    // Load project from API
+    fetch(`/api/projects/${projectId}`)
+      .then(res => res.json())
+      .then(data => {
+        setProjectData(data);
+        setLoading(false);
+      });
+  }, [projectId]);
+
+  if (loading) return <div>Loading...</div>;
+
+  return (
+    <StudioEditor
+      options={{
+        project: projectData,
+        plugins: [
+          editor => {
+            editor.on('update', () => {
+              const data = editor.getProjectData();
+              // Auto-save to API
+              fetch(`/api/projects/${projectId}`, {
+                method: 'PUT',
+                body: JSON.stringify(data),
+                headers: { 'Content-Type': 'application/json' }
+              });
+            });
+          }
+        ]
+      }}
+    />
+  );
+}
+```
+
+### With Authentication
+
+```jsx
+function PageBuilder() {
+  const { user } = useAuth();
+
+  return (
+    <StudioEditor
+      options={{
+        identity: {
+          id: user.id
+        },
+        assets: {
+          storageType: 'cloud',
+          apiKey: process.env.REACT_APP_STORAGE_KEY
+        },
+        plugins: [
+          editor => {
+            editor.onReady(() => {
+              // Track user activity
+              analytics.track('Editor Opened', {
+                userId: user.id,
+                timestamp: new Date()
+              });
+            });
+          }
+        ]
+      }}
+    />
+  );
+}
+```
+
+## Deployment
+
+### Production Build
+
+1. Build your React app:
+```bash
+npm run build
+```
+
+2. Serve static files:
+```bash
+npm install -g serve
+serve -s build
+```
+
+### Environment Variables
+
+Create `.env` file:
+```env
+REACT_APP_API_URL=https://api.yoursite.com
+REACT_APP_STORAGE_KEY=your-storage-key
+```
+
+Access in code:
+```javascript
+const apiUrl = process.env.REACT_APP_API_URL;
+```
+
+### Performance Optimization
+
+1. **Code Splitting**
+```javascript
+const PageBuilder = lazy(() => import('./PageBuilder'));
+
+<Suspense fallback={<Loading />}>
+  <PageBuilder />
+</Suspense>
+```
+
+2. **Asset Optimization**
+- Use CDN for images
+- Compress assets
+- Lazy load images
+
+3. **Caching**
+```javascript
+// Service worker caching
+// In public/service-worker.js
+self.addEventListener('fetch', event => {
+  event.respondWith(
+    caches.match(event.request).then(response => {
+      return response || fetch(event.request);
+    })
+  );
+});
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Editor Not Rendering
+**Problem:** White screen or no editor visible
+**Solution:**
+- Check container has explicit width/height
+- Verify all dependencies are installed
+- Check console for errors
+
+```jsx
+// ✅ Good
+<div style={{ width: '100vw', height: '100vh' }}>
+  <StudioEditor options={{...}} />
+</div>
+
+// ❌ Bad
+<div>
+  <StudioEditor options={{...}} />
+</div>
+```
+
+#### 2. Blocks Not Working
+**Problem:** Blocks don't appear in panel
+**Solution:**
+- Verify block configuration
+- Check category name
+- Ensure content is valid HTML
+
+#### 3. Styles Not Applying
+**Problem:** CSS styles don't show in canvas
+**Solution:**
+- Include Tailwind CDN in page head
+- Check selector syntax
+- Verify style manager target
+
+#### 4. Save Not Working
+**Problem:** Changes not persisting
+**Solution:**
+- Implement proper save handler
+- Check localStorage limits
+- Verify API endpoints
+
+### Debug Mode
+
+Enable debug logging:
+```javascript
+plugins: [
+  editor => {
+    editor.on('all', (eventName, ...args) => {
+      console.log('Event:', eventName, args);
+    });
+  }
+]
+```
+
+## Testing
+
+### Unit Tests
+```javascript
+import { render, screen } from '@testing-library/react';
+import PageBuilder from './PageBuilder';
+
+test('renders page builder', () => {
+  render(<PageBuilder />);
+  expect(screen.getByRole('main')).toBeInTheDocument();
+});
+```
+
+### E2E Tests (Cypress)
+```javascript
+describe('Page Builder', () => {
+  it('should create new page', () => {
+    cy.visit('/builder');
+    cy.get('[data-test="add-page"]').click();
+    cy.get('[data-test="page-name"]').type('New Page');
+    cy.get('[data-test="save"]').click();
+  });
+});
+```
+
+## Best Practices
+
+1. **Always set container dimensions explicitly**
+2. **Implement proper error handling**
+3. **Use debounced auto-save**
+4. **Validate user input**
+5. **Test on multiple browsers**
+6. **Optimize images and assets**
+7. **Use production build for deployment**
+8. **Implement proper authentication**
+9. **Handle network errors gracefully**
+10. **Monitor performance metrics**
+
+## Resources
+
+- [Studio SDK Documentation](https://grapesjs.com/docs/studio-sdk/)
+- [API Reference](https://grapesjs.com/docs/api/)
+- [Plugin Guide](https://grapesjs.com/docs/plugins/)
+- [Community Forum](https://github.com/GrapesJS/grapesjs/discussions)
+- [Examples Repository](https://github.com/GrapesJS/grapesjs-examples)
+
+## Need Help?
+
+1. Check the [FAQ](https://grapesjs.com/docs/faq/)
+2. Search [GitHub Issues](https://github.com/GrapesJS/grapesjs/issues)
+3. Ask on [Community Forum](https://github.com/GrapesJS/grapesjs/discussions)
+4. Check [Stack Overflow](https://stackoverflow.com/questions/tagged/grapesjs)
+
+---
+
+**Happy Building! 🚀**

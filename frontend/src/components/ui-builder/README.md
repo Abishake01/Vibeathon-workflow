@@ -1,363 +1,326 @@
-# GrapesJS Page Builder Integration
+# GrapesJS Studio SDK Page Builder
 
-A modern, feature-rich page builder integrated into the workflow builder application using GrapesJS.
+A modern, feature-rich no-code page builder powered by GrapesJS Studio SDK.
+
+## Overview
+
+This page builder has been completely rebuilt using the latest **GrapesJS Studio SDK** instead of the legacy GrapesJS library. This provides a significantly improved user experience with modern features, better performance, and a cleaner codebase.
 
 ## Features
 
-### Core Functionality
-- ✅ **Drag & Drop Interface** - Intuitive drag-and-drop for building pages
-- ✅ **Responsive Design Preview** - Test designs on Desktop, Tablet, and Mobile
-- ✅ **Modern UI** - Glass-morphism design with dark/light theme support
-- ✅ **Code Export** - Export HTML, CSS, and JavaScript with syntax highlighting
-- ✅ **Widget Import** - Import external HTML/CSS/JS as custom widgets
-- ✅ **Project Management** - Save, load, and manage multiple page projects
-- ✅ **Auto-save** - Automatic project saving to localStorage
-- ✅ **Workflow Integration** - Trigger workflows from page events
+### 🎨 Modern UI/UX
+- Clean, intuitive interface with tabbed panels
+- Light and dark theme support
+- Responsive design for all screen sizes
+- Smooth animations and transitions
 
-### Block Categories
+### 🧩 Pre-built Components
+- **Hero Sections** - Eye-catching landing sections with gradients
+- **Feature Grids** - Showcase features in beautiful card layouts
+- **Call-to-Action** - Convert visitors with compelling CTAs
+- **Pricing Cards** - Professional pricing tables
+- **Testimonials** - Display customer reviews with ratings
+- **Advanced Components** - Dialogs, tables, navigation, and image galleries
 
-#### Basic Blocks
-- Text
-- Heading
-- Paragraph
-- Image
-- Button
-- Link
-- Divider
-- Spacer
-- Icon
+### 📐 Layout System
+- Drag-and-drop block system
+- Three-panel layout (Blocks, Canvas, Properties)
+- Tabbed interface for blocks, layers, styles, and properties
+- Visual component tree (Layers panel)
+- Advanced style editor with all CSS properties
 
-#### Layout Blocks
-- Container
-- Section
-- 2/3/4 Column Grids
-- Flex Row/Column
-- Card
+### 🎯 Global Styles
+- Define global colors and typography
+- Centralized style management
+- Consistent design system across pages
 
-#### Form Blocks
-- Complete Form
-- Input
-- Textarea
-- Select
-- Checkbox
-- Radio
-- Label
-- Submit Button
+### 📄 Multi-page Support
+- Create unlimited pages
+- Duplicate existing pages
+- Page-specific settings
+- Easy navigation between pages
 
-#### Media Blocks
-- Video (YouTube/Vimeo)
-- HTML5 Video
-- Image Gallery
-- Audio
-- Icon Box
-- Map
+### 💾 Project Management
+- Auto-save functionality
+- Local storage persistence
+- Project export/import
+- Template system with pre-built designs
 
-#### Advanced Blocks
-- Navbar
-- Hero Section
-- Footer
-- CTA Section
-- Testimonial
-- Pricing Card
-- Feature Grid
-- Accordion
+### 🖼️ Asset Management
+- Upload images and media
+- Asset library
+- Easy integration with external URLs
+- Support for various file types
+
+### 🔌 Plugin System
+- Dialog Component - Interactive modals
+- Table Component - Advanced data tables
+- Navigation Component - Dynamic page links
+- Image Gallery - Lightbox for images
 
 ## Architecture
 
+### Technology Stack
+- **React** - UI framework
+- **GrapesJS Studio SDK** - Page builder core
+- **Studio SDK Plugins** - Extended functionality
+- **Tailwind CSS** - Styling framework (in canvas)
+
 ### File Structure
 ```
-frontend/src/components/ui-builder/
-├── PageBuilder.jsx              # Main page builder component
-├── PageBuilder.css              # Main styles
-├── PageBuilderToolbar.jsx       # Top toolbar with actions
-├── PageBuilderToolbar.css       # Toolbar styles
-├── grapesConfig.js              # GrapesJS configuration
-├── WidgetImportModal.jsx        # Import external widgets
-├── WidgetImportModal.css        # Import modal styles
-├── CodeExportModal.jsx          # Export code with syntax highlighting
-├── CodeExportModal.css          # Export modal styles
-├── ProjectManager.jsx           # Manage multiple projects
-├── ProjectManager.css           # Project manager styles
-└── blocks/
-    ├── index.js                 # Block exports
-    ├── basicBlocks.js           # Basic UI blocks
-    ├── layoutBlocks.js          # Layout components
-    ├── formBlocks.js            # Form elements
-    ├── mediaBlocks.js           # Media components
-    └── advancedBlocks.js        # Advanced components
+ui-builder/
+├── PageBuilder.jsx       # Main component
+├── PageBuilder.css       # Styles
+├── README.md            # Documentation (this file)
+└── SETUP_GUIDE.md       # Setup instructions
 ```
 
-### Key Components
+## Configuration
 
-#### PageBuilder.jsx
-Main component that initializes and manages GrapesJS editor.
-- Handles GrapesJS initialization
-- Manages editor state
-- Coordinates toolbar actions
-- Handles save/load operations
+The page builder is configured through the `StudioEditor` options:
 
-#### PageBuilderToolbar.jsx
-Modern toolbar with:
-- Project name editing
-- Device switcher (Desktop/Tablet/Mobile)
-- Undo/Redo actions
-- Preview mode
-- Export/Import functionality
-- Project management
-
-#### Modals
-- **WidgetImportModal**: Import external HTML/CSS/JS as custom blocks
-- **CodeExportModal**: Export code with syntax highlighting (HTML, CSS, JS)
-- **ProjectManager**: Save, load, and manage multiple page projects
-
-## Usage
-
-### Basic Usage
-
-1. **Navigate to Page Builder**
-   - Click on "Page Builder" tab in the top navigation
-
-2. **Add Elements**
-   - Browse blocks in the left panel
-   - Drag blocks onto the canvas
-   - Customize using the style panel
-
-3. **Responsive Design**
-   - Use device switcher to preview different screen sizes
-   - Adjust styles for each breakpoint
-
-4. **Save Project**
-   - Click "Save" button in toolbar
-   - Projects auto-save every change
-   - Access saved projects via "Projects" button
-
-5. **Export Code**
-   - Click "Export" button
-   - Choose export type (HTML only, HTML+CSS, Full package)
-   - Copy code or download files
-
-### Advanced Features
-
-#### Custom Widget Import
-
+### Theme
 ```javascript
-// Example: Import custom widget
-1. Click "Import" button
-2. Upload HTML/CSS/JS files or paste code
-3. Widget appears in "Custom" category
-4. Drag onto canvas like any other block
-```
-
-#### Workflow Integration
-
-```javascript
-// Page Event Trigger Node
-- Triggers workflows from page events
-- Supports: button clicks, form submissions, page load
-- Extract form data automatically
-
-// Render UI Component Node
-- Display page builder components in workflows
-- Multiple render modes: inline, modal, fullscreen
-- Dynamic component rendering
-```
-
-#### Project Management
-
-```javascript
-// Save multiple projects
-1. Click "Projects" button
-2. View all saved projects
-3. Load, export, or delete projects
-4. Import projects from JSON files
-```
-
-## API Integration
-
-### pageBuilderApi.js
-
-Provides backend communication for:
-- Save/update pages
-- Load pages
-- Delete pages
-- Publish pages
-- Get published URLs
-
-Includes localStorage fallback when backend is unavailable.
-
-```javascript
-import { pageBuilderApi } from './api/pageBuilderApi';
-
-// Save page
-await pageBuilderApi.savePage(pageData);
-
-// Load page
-const page = await pageBuilderApi.loadPage(pageId);
-
-// Publish page
-const published = await pageBuilderApi.publishPage(pageId);
-```
-
-## Workflow Integration Nodes
-
-### Page Event Trigger
-**Location**: Triggers category
-
-Trigger workflows from page builder events:
-- Button clicks
-- Form submissions
-- Page load
-- Element clicks
-- Custom events
-
-**Properties**:
-- Event Type
-- Element ID
-- Custom Event Name
-- Debounce delay
-- Extract form data
-
-### Render UI Component
-**Location**: UI category
-
-Display page builder components:
-- Inline rendering
-- Modal display
-- Fullscreen mode
-
-**Properties**:
-- Component ID
-- Render Mode
-- Width/Height
-
-## Theme Support
-
-The page builder fully supports light and dark themes:
-- Automatic theme detection
-- Smooth theme transitions
-- Custom GrapesJS styling for each theme
-- Panel and toolbar theme integration
-
-## Keyboard Shortcuts
-
-- `Ctrl/Cmd + S` - Save project
-- `Ctrl/Cmd + Z` - Undo
-- `Ctrl/Cmd + Y` - Redo
-- `Ctrl/Cmd + P` - Preview mode
-- `Escape` - Close modals
-
-## Storage
-
-### LocalStorage Keys
-- `gjsProject` - Current project
-- `gjsProject_{name}` - Named projects
-- `pageBuilderPages` - All saved pages
-
-### Data Structure
-```json
-{
-  "projectName": "My Project",
-  "html": "<div>...</div>",
-  "css": "...",
-  "components": [...],
-  "styles": [...],
-  "savedAt": "2024-01-01T00:00:00.000Z"
+theme: 'light' | 'dark'
+customTheme: {
+  colors: {
+    global: { /* colors */ },
+    primary: { /* colors */ },
+    component: { /* colors */ }
+  }
 }
 ```
 
-## Browser Compatibility
+### Project
+```javascript
+project: {
+  type: 'web',
+  default: {
+    pages: [
+      {
+        id: 'page-id',
+        name: 'Page Name',
+        component: '<html>...</html>'
+      }
+    ]
+  }
+}
+```
 
+### Layout
+The layout is fully customizable with panels, tabs, and buttons:
+```javascript
+layout: {
+  default: {
+    type: 'row',
+    children: [
+      { type: 'sidebarLeft' },
+      { type: 'canvasSidebarTop' },
+      { type: 'sidebarRight' }
+    ]
+  }
+}
+```
+
+### Blocks
+Custom blocks can be added with full HTML/CSS support:
+```javascript
+blocks: {
+  default: [
+    {
+      id: 'my-block',
+      label: 'My Block',
+      category: 'Custom',
+      media: '<svg>...</svg>',
+      content: '<div>...</div>'
+    }
+  ]
+}
+```
+
+### Plugins
+```javascript
+plugins: [
+  dialogComponent.init({ block: { category: 'Advanced' } }),
+  tableComponent.init({ block: { category: 'Advanced' } }),
+  listPagesComponent.init({ block: { category: 'Advanced' } }),
+  fsLightboxComponent.init({ block: { category: 'Advanced' } })
+]
+```
+
+## Usage
+
+### Basic Implementation
+```jsx
+import PageBuilder from './components/ui-builder/PageBuilder';
+
+function App() {
+  return <PageBuilder />;
+}
+```
+
+### With Theme Context
+```jsx
+import { useTheme } from './theme';
+import PageBuilder from './components/ui-builder/PageBuilder';
+
+function App() {
+  const { theme, toggleTheme } = useTheme();
+  
+  return (
+    <div className={theme}>
+      <button onClick={toggleTheme}>Toggle Theme</button>
+      <PageBuilder />
+    </div>
+  );
+}
+```
+
+## API Reference
+
+### Editor Instance
+The editor instance is available through the `onReady` callback:
+
+```javascript
+editor => {
+  // Get project data
+  const projectData = editor.getProjectData();
+  
+  // Save project
+  localStorage.setItem('project', JSON.stringify(projectData));
+  
+  // Listen to changes
+  editor.on('update', () => {
+    console.log('Project updated');
+  });
+}
+```
+
+### Key Methods
+- `editor.getProjectData()` - Get full project JSON
+- `editor.Pages.add()` - Add a new page
+- `editor.Pages.getAll()` - Get all pages
+- `editor.Blocks.add()` - Add custom block
+- `editor.on('event', callback)` - Listen to events
+
+## Customization
+
+### Adding Custom Blocks
+```javascript
+blocks: {
+  default: [
+    {
+      id: 'custom-button',
+      label: 'Custom Button',
+      category: 'Components',
+      media: '<svg>...</svg>',
+      content: `
+        <button class="px-6 py-3 bg-blue-600 text-white rounded-lg">
+          Click Me
+        </button>
+      `
+    }
+  ]
+}
+```
+
+### Global Styles
+```javascript
+globalStyles: {
+  default: [
+    {
+      id: 'primaryColor',
+      property: 'color',
+      field: 'color',
+      defaultValue: '#3b82f6',
+      selector: ':root',
+      label: 'Primary Color',
+      category: { id: 'colors', label: 'Colors' }
+    }
+  ]
+}
+```
+
+### Templates
+```javascript
+templates: {
+  onLoad: async () => [
+    {
+      id: 'template-1',
+      name: 'Landing Page',
+      thumbnail: 'https://...',
+      data: {
+        pages: [/* page data */]
+      }
+    }
+  ]
+}
+```
+
+## Migration from Legacy GrapesJS
+
+### Key Differences
+1. **No Manual Configuration** - Studio SDK handles most setup
+2. **Built-in UI** - No need for custom panels and toolbars
+3. **Modern API** - Cleaner, more intuitive methods
+4. **Better Performance** - Optimized rendering and state management
+5. **Plugin System** - Official plugins with guaranteed compatibility
+
+### Benefits
+- ✅ Faster development
+- ✅ Better UX out of the box
+- ✅ Easier maintenance
+- ✅ Modern features
+- ✅ Active support
+- ✅ Regular updates
+
+## Troubleshooting
+
+### Editor Not Loading
+- Check that all dependencies are installed
+- Verify Studio SDK version compatibility
+- Check browser console for errors
+
+### Styles Not Applying
+- Ensure Tailwind CDN is loaded in page head
+- Check that styles are saved correctly
+- Verify selector targeting
+
+### Blocks Not Appearing
+- Check block category spelling
+- Verify block content is valid HTML
+- Check for JavaScript errors
+
+## Browser Support
 - Chrome 90+
 - Firefox 88+
 - Safari 14+
 - Edge 90+
 
-## Performance
+## Performance Tips
+1. Use lazy loading for images
+2. Minimize custom CSS rules
+3. Optimize block content
+4. Use production build for deployment
+5. Enable caching in production
 
-- Lazy loading of blocks
-- Optimized rendering
-- Efficient state management
-- Auto-save throttling
-- Responsive canvas updates
-
-## Customization
-
-### Adding Custom Blocks
-
-```javascript
-// In blocks/customBlocks.js
-export const customBlocks = [
-  {
-    id: 'my-block',
-    label: 'My Custom Block',
-    category: 'Custom',
-    content: '<div class="my-block">Content</div>'
-  }
-];
-
-// Add to allBlocks in blocks/index.js
-```
-
-### Custom Styling
-
-```css
-/* In PageBuilder.css */
-.my-custom-style {
-  /* Your styles */
-}
-```
-
-### Theme Customization
-
-```javascript
-// In grapesConfig.js
-// Modify color schemes, fonts, etc.
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Blocks not appearing**
-   - Check browser console for errors
-   - Verify block definitions in blocks/
-   - Ensure GrapesJS is properly initialized
-
-2. **Save not working**
-   - Check localStorage quota
-   - Clear old projects if needed
-   - Verify browser permissions
-
-3. **Theme not applying**
-   - Check data-theme attribute
-   - Verify CSS is loaded
-   - Check theme provider
-
-4. **Export issues**
-   - Verify Prism.js is loaded
-   - Check code generation
-   - Test with different export types
-
-## Future Enhancements
-
-- [ ] Template library with pre-built pages
-- [ ] Component library for reusable elements
-- [ ] Version control for projects
-- [ ] Collaboration features
-- [ ] Asset management
-- [ ] SEO optimization tools
-- [ ] Performance monitoring
-- [ ] A/B testing integration
-
-## Credits
-
-Built with:
-- [GrapesJS](https://grapesjs.com/) - Web Builder Framework
-- [React](https://react.dev/) - UI Library
-- [Prism.js](https://prismjs.com/) - Syntax Highlighting
-- [React Icons](https://react-icons.github.io/react-icons/) - Icons
+## Resources
+- [GrapesJS Studio SDK Docs](https://grapesjs.com/docs/studio-sdk/)
+- [Plugin Documentation](https://grapesjs.com/docs/studio-sdk/plugins/)
+- [API Reference](https://grapesjs.com/docs/api/)
+- [Community Forum](https://github.com/GrapesJS/grapesjs/discussions)
 
 ## License
+This project uses GrapesJS Studio SDK. Check their licensing terms for commercial use.
 
-Same as parent project
+## Support
+For issues and questions:
+1. Check the documentation
+2. Search existing issues
+3. Create a new issue with details
+4. Join the community forum
 
+---
+
+**Last Updated:** November 2024
+**Version:** 2.0.0 (Studio SDK)
