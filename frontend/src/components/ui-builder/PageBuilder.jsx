@@ -69,6 +69,8 @@ function PageBuilder() {
   const [aiMode, setAiMode] = useState('generate'); // 'generate' or 'edit'
   const [aiDescription, setAiDescription] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [aiEditPreview, setAiEditPreview] = useState({ html: '', css: '', js: '' });
+  const [showAIEditPreview, setShowAIEditPreview] = useState(false);
   
   // AI Settings Modal state
   const [showAISettingsModal, setShowAISettingsModal] = useState(false);
@@ -1092,14 +1094,71 @@ function PageBuilder() {
       
       if (response.error) {
         alert(`Error: ${response.error}`);
+        setIsGenerating(false);
         return;
       }
       
-      // Combine HTML, CSS, and JS
-      let componentContent = response.html || '';
+      // Clean and store generated code in preview state
+      const cleanPreviewHtml = (response.html || '').replace(/\s+id=["'][^"']*["']/gi, '');
+      let cleanPreviewJs = response.js || '';
       
-      if (response.css) {
-        const cssContent = response.css.trim();
+      // Clean JavaScript to prevent errors
+      if (cleanPreviewJs) {
+        const uniqueSuffix = `_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        cleanPreviewJs = cleanPreviewJs
+          .replace(/(const|let|var)\s+(\w+)\s*=/g, (m, decl, name) => {
+            if (['window', 'document', 'console', 'Math', 'Date', 'Array', 'Object', 'String', 'Number'].includes(name)) {
+              return m;
+            }
+            return `${decl} ${name}${uniqueSuffix} =`;
+          })
+          .replace(/function\s+(\w+)\s*\(/g, (m, name) => {
+            return `function ${name}${uniqueSuffix}(`;
+          });
+      }
+      
+      setAiEditPreview({
+        html: cleanPreviewHtml,
+        css: response.css || '',
+        js: cleanPreviewJs
+      });
+      
+      // Show preview
+      setShowAIEditPreview(true);
+      
+      // Show success notification
+      const notification = document.createElement('div');
+      notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
+      notification.textContent = '✓ Code generated! Preview below and click "Apply Changes" to update the component.';
+      document.body.appendChild(notification);
+      setTimeout(() => notification.remove(), 5000);
+      
+    } catch (error) {
+      console.error('Error generating code:', error);
+      alert(`Error generating code: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [editor, selectedComponent, aiMode, aiDescription]);
+  
+  // Apply the previewed changes to the component
+  const handleApplyAIEditChanges = useCallback(() => {
+    if (!editor || !selectedComponent) {
+      alert('Please select a component first.');
+      return;
+    }
+    
+    if (!aiEditPreview.html) {
+      alert('No changes to apply.');
+      return;
+    }
+    
+    try {
+      // Combine HTML, CSS, and JS
+      let componentContent = aiEditPreview.html || '';
+      
+      if (aiEditPreview.css) {
+        const cssContent = aiEditPreview.css.trim();
         if (cssContent && !cssContent.startsWith('<style')) {
           componentContent = `<style>${cssContent}</style>${componentContent}`;
         } else if (cssContent) {
@@ -1107,8 +1166,8 @@ function PageBuilder() {
         }
       }
       
-      if (response.js) {
-        const jsContent = response.js.trim();
+      if (aiEditPreview.js) {
+        const jsContent = aiEditPreview.js.trim();
         if (jsContent && !jsContent.startsWith('<script')) {
           componentContent = `${componentContent}<script>${jsContent}</script>`;
         } else if (jsContent) {
@@ -1125,18 +1184,32 @@ function PageBuilder() {
           const currentContent = selectedComponent.toHTML();
           const parent = selectedComponent.parent();
           
-          // Clean componentContent to remove duplicate IDs
+          // Clean componentContent to remove duplicate IDs and fix JS errors
           let cleanContent = componentContent;
           try {
             // Remove any existing IDs from the generated HTML to avoid conflicts
             cleanContent = cleanContent.replace(/\s+id=["'][^"']*["']/gi, '');
-            // Also remove any script tags that might have duplicate variable declarations
-            cleanContent = cleanContent.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, (match) => {
-              // Keep script tags but ensure they don't have duplicate declarations
-              return match.replace(/(const|let|var)\s+(\w+)\s*=/g, (m, decl, name) => {
-                // Add unique suffix to variable names to avoid conflicts
-                return `${decl} ${name}_${Date.now()} =`;
-              });
+            // Also remove any script tags that might have duplicate variable declarations or errors
+            cleanContent = cleanContent.replace(/<script[^>]*>([\s\S]*?)<\/script>/gi, (match, scriptContent) => {
+              // Wrap script content in try-catch to prevent errors
+              const uniqueSuffix = `_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              let cleanedScript = scriptContent
+                // Fix variable declarations to be unique
+                .replace(/(const|let|var)\s+(\w+)\s*=/g, (m, decl, name) => {
+                  // Skip if it's already been processed or is a common global
+                  if (['window', 'document', 'console', 'Math', 'Date', 'Array', 'Object', 'String', 'Number'].includes(name)) {
+                    return m;
+                  }
+                  return `${decl} ${name}${uniqueSuffix} =`;
+                })
+                // Fix function declarations
+                .replace(/function\s+(\w+)\s*\(/g, (m, name) => {
+                  return `function ${name}${uniqueSuffix}(`;
+                })
+                // Wrap in try-catch
+                .replace(/^([\s\S]*)$/, `try { $1 } catch(e) { console.error('Script error:', e); }`);
+              
+              return `<script>${cleanedScript}</script>`;
             });
           } catch (cleanError) {
             console.warn('Could not clean content, using as-is:', cleanError);
@@ -1188,13 +1261,26 @@ function PageBuilder() {
           // Get the updated component
           const updatedComponent = editor.getSelected() || selectedComponent;
           
-          // Trigger component update events
+          // Trigger component update events (skip UndoManager to avoid errors)
           try {
-            updatedComponent.trigger('change:content');
-            updatedComponent.trigger('change');
-            updatedComponent.trigger('update');
-            editor.trigger('component:update', updatedComponent);
-            editor.trigger('component:change', updatedComponent);
+            // Use setTimeout to avoid UndoManager conflicts
+            setTimeout(() => {
+              try {
+                updatedComponent.trigger('change:content');
+                updatedComponent.trigger('change');
+                updatedComponent.trigger('update');
+              } catch (e) {
+                // Ignore individual event errors
+              }
+            }, 0);
+            
+            // Trigger editor events separately
+            try {
+              editor.trigger('component:update', updatedComponent);
+              editor.trigger('component:change', updatedComponent);
+            } catch (e) {
+              // Ignore editor event errors
+            }
           } catch (e) {
             console.warn('Error triggering events:', e);
           }
@@ -1302,22 +1388,22 @@ function PageBuilder() {
       // Show success notification
       const notification = document.createElement('div');
       notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
-      notification.textContent = `✓ Code ${aiMode === 'edit' ? 'updated' : 'generated'} successfully!`;
+      notification.textContent = `✓ Component ${aiMode === 'edit' ? 'updated' : 'generated'} successfully!`;
       document.body.appendChild(notification);
       setTimeout(() => notification.remove(), 3000);
       
       // Close modal and reset
       setShowAIEditModal(false);
+      setShowAIEditPreview(false);
       setAiDescription('');
+      setAiEditPreview({ html: '', css: '', js: '' });
       setAiMode('generate');
       
     } catch (error) {
-      console.error('Error generating code:', error);
-      alert(`Error generating code: ${error.message || 'Unknown error'}`);
-    } finally {
-      setIsGenerating(false);
+      console.error('Error applying changes:', error);
+      alert(`Error applying changes: ${error.message || 'Unknown error'}`);
     }
-  }, [editor, selectedComponent, aiMode, aiDescription]);
+  }, [editor, selectedComponent, aiEditPreview, aiMode]);
 
   return (
     <div className="app" style={{ width: '100%', height: '100vh' }}>
@@ -2868,39 +2954,192 @@ function PageBuilder() {
                   <FiX />
                 </button>
               </div>
-              <div className="import-modal-body">
-                <div style={{ marginBottom: '20px' }}>
-                  <label style={{ 
-                    display: 'block', 
-                    marginBottom: '8px', 
-                    fontWeight: '600', 
-                    color: theme === 'dark' ? '#fff' : '#333' 
+              <div className="import-modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+                {/* Description Input - Show when no preview */}
+                {!showAIEditPreview && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ 
+                      display: 'block', 
+                      marginBottom: '8px', 
+                      fontWeight: '600', 
+                      color: theme === 'dark' ? '#fff' : '#333' 
+                    }}>
+                      {aiMode === 'edit' ? 'Describe how you want to edit this component:' : 'Describe what you want to generate:'}
+                    </label>
+                    <textarea
+                      className="import-textarea"
+                      placeholder={
+                        aiMode === 'edit' 
+                          ? "e.g., Make it more modern with gradient backgrounds and rounded corners"
+                          : "e.g., A hero section with a call-to-action button and animated background"
+                      }
+                      value={aiDescription}
+                      onChange={(e) => setAiDescription(e.target.value)}
+                      rows={6}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: '6px',
+                        border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                        backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                        color: theme === 'dark' ? '#fff' : '#333',
+                        fontFamily: 'inherit',
+                        fontSize: '14px',
+                        resize: 'vertical'
+                      }}
+                    />
+                  </div>
+                )}
+                
+                {/* Preview Section - Show when preview is available */}
+                {showAIEditPreview && aiEditPreview.html && (
+                  <div style={{ 
+                    marginBottom: '20px',
+                    border: `2px solid ${theme === 'dark' ? '#7c3aed' : '#a855f7'}`,
+                    borderRadius: '12px',
+                    padding: '16px',
+                    backgroundColor: theme === 'dark' ? '#1e1b4b' : '#f3e8ff',
+                    boxShadow: theme === 'dark' 
+                      ? '0 4px 6px rgba(124, 58, 237, 0.3)' 
+                      : '0 4px 6px rgba(168, 85, 247, 0.2)'
                   }}>
-                    {aiMode === 'edit' ? 'Describe how you want to edit this component:' : 'Describe what you want to generate:'}
-                  </label>
-                  <textarea
-                    className="import-textarea"
-                    placeholder={
-                      aiMode === 'edit' 
-                        ? "e.g., Make it more modern with gradient backgrounds and rounded corners"
-                        : "e.g., A hero section with a call-to-action button and animated background"
-                    }
-                    value={aiDescription}
-                    onChange={(e) => setAiDescription(e.target.value)}
-                    rows={6}
-                    style={{
-                      width: '100%',
-                      padding: '12px',
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center',
+                      marginBottom: '16px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '50%',
+                          backgroundColor: '#10b981',
+                          animation: 'pulse 2s infinite'
+                        }}></div>
+                        <label style={{ 
+                          fontWeight: '700', 
+                          fontSize: '16px',
+                          color: theme === 'dark' ? '#fff' : '#333' 
+                        }}>
+                          Live Preview
+                        </label>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={() => {
+                            setShowAIEditPreview(false);
+                            setAiEditPreview({ html: '', css: '', js: '' });
+                          }}
+                          style={{
+                            padding: '8px 16px',
+                            borderRadius: '6px',
+                            border: `1px solid ${theme === 'dark' ? '#666' : '#ccc'}`,
+                            backgroundColor: theme === 'dark' ? '#444' : '#fff',
+                            color: theme === 'dark' ? '#fff' : '#333',
+                            cursor: 'pointer',
+                            fontWeight: '500',
+                            fontSize: '13px',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.target.style.backgroundColor = theme === 'dark' ? '#555' : '#f0f0f0';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.target.style.backgroundColor = theme === 'dark' ? '#444' : '#fff';
+                          }}
+                        >
+                          ↻ Regenerate
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        border: `2px solid ${theme === 'dark' ? '#4c1d95' : '#c4b5fd'}`,
+                        borderRadius: '8px',
+                        padding: '16px',
+                        backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff',
+                        minHeight: '450px',
+                        maxHeight: '600px',
+                        overflow: 'hidden',
+                        position: 'relative',
+                        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)'
+                      }}
+                    >
+                      <iframe
+                        title="Preview"
+                        srcDoc={`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+      background: #ffffff;
+    }
+    ${aiEditPreview.css || ''}
+  </style>
+  <script>
+    window.addEventListener('error', function(e) {
+      console.error('Preview error:', e.message);
+      e.preventDefault();
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error('Preview promise rejection:', e.reason);
+      e.preventDefault();
+    });
+  </script>
+</head>
+<body>
+  ${aiEditPreview.html || ''}
+  <script>
+    try {
+      ${aiEditPreview.js || ''}
+    } catch(e) {
+      console.error('Script error in preview:', e);
+    }
+  </script>
+</body>
+</html>`}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          minHeight: '450px',
+                          border: 'none',
+                          borderRadius: '4px',
+                          backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff'
+                        }}
+                        sandbox="allow-scripts allow-same-origin"
+                      />
+                    </div>
+                    <div style={{
+                      marginTop: '12px',
+                      padding: '10px',
                       borderRadius: '6px',
-                      border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
-                      backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
-                      color: theme === 'dark' ? '#fff' : '#333',
-                      fontFamily: 'inherit',
-                      fontSize: '14px',
-                      resize: 'vertical'
-                    }}
-                  />
-                </div>
+                      backgroundColor: theme === 'dark' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(16, 185, 129, 0.05)',
+                      border: `1px solid ${theme === 'dark' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(16, 185, 129, 0.2)'}`
+                    }}>
+                      <p style={{
+                        margin: 0,
+                        fontSize: '13px',
+                        color: theme === 'dark' ? '#6ee7b7' : '#059669',
+                        fontWeight: '500',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}>
+                        <span>✓</span>
+                        <span>Review the preview above. Click "Apply Changes" to update your component.</span>
+                      </p>
+                    </div>
+                  </div>
+                )}
                 
                 {isGenerating && (
                   <div style={{
@@ -2927,7 +3166,9 @@ function PageBuilder() {
                   className="btn btn-secondary" 
                   onClick={() => {
                     setShowAIEditModal(false);
+                    setShowAIEditPreview(false);
                     setAiDescription('');
+                    setAiEditPreview({ html: '', css: '', js: '' });
                   }}
                   disabled={isGenerating}
                   style={{
@@ -2943,25 +3184,43 @@ function PageBuilder() {
                 >
                   Cancel
                 </button>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={handleGenerateCode}
-                  disabled={!aiDescription.trim() || isGenerating}
-                  style={{
-                    padding: '10px 20px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    backgroundColor: (!aiDescription.trim() || isGenerating)
-                      ? (theme === 'dark' ? '#444' : '#ccc')
-                      : (theme === 'dark' ? '#a855f7' : '#7c3aed'),
-                    color: '#fff',
-                    cursor: (!aiDescription.trim() || isGenerating) ? 'not-allowed' : 'pointer',
-                    fontWeight: '600',
-                    opacity: (!aiDescription.trim() || isGenerating) ? 0.6 : 1
-                  }}
-                >
-                  {isGenerating ? 'Generating...' : (aiMode === 'edit' ? 'Update Component' : 'Generate Code')}
-                </button>
+                {!showAIEditPreview ? (
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={handleGenerateCode}
+                    disabled={!aiDescription.trim() || isGenerating}
+                    style={{
+                      padding: '10px 20px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: (!aiDescription.trim() || isGenerating)
+                        ? (theme === 'dark' ? '#444' : '#ccc')
+                        : (theme === 'dark' ? '#a855f7' : '#7c3aed'),
+                      color: '#fff',
+                      cursor: (!aiDescription.trim() || isGenerating) ? 'not-allowed' : 'pointer',
+                      fontWeight: '600',
+                      opacity: (!aiDescription.trim() || isGenerating) ? 0.6 : 1
+                    }}
+                  >
+                    {isGenerating ? 'Generating...' : (aiMode === 'edit' ? 'Generate Preview' : 'Generate Code')}
+                  </button>
+                ) : (
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={handleApplyAIEditChanges}
+                    style={{
+                      padding: '10px 20px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontWeight: '600'
+                    }}
+                  >
+                    ✓ Apply Changes
+                  </button>
+                )}
               </div>
             </div>
           </div>
