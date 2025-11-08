@@ -3,7 +3,7 @@ Django REST Framework serializers for workflows
 """
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Workflow, WorkflowExecution, Credential, ExportedWorkflow, UIBuilderProject
+from .models import Workflow, WorkflowExecution, Credential, ExportedWorkflow, UIBuilderProject, CustomWidget
 
 
 class WorkflowSerializer(serializers.ModelSerializer):
@@ -163,4 +163,16 @@ class UIBuilderProjectSerializer(serializers.ModelSerializer):
             'assets', 'created_at', 'updated_at', 'is_active'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class CustomWidgetSerializer(serializers.ModelSerializer):
+    """Serializer for CustomWidget model"""
+    
+    class Meta:
+        model = CustomWidget
+        fields = [
+            'id', 'name', 'html_content', 'css_content', 'js_content', 
+            'block_id', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'block_id', 'created_at', 'updated_at']
 

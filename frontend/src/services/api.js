@@ -1,102 +1,142 @@
 /**
- * API service with authentication support
+ * Enhanced API service with JWT token authentication
  */
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
 
 class ApiService {
   constructor() {
     this.baseURL = API_BASE_URL;
-  }
-
-  /**
-   * Get CSRF token from cookies
-   */
-  getCsrfToken() {
-    const name = 'csrftoken';
-    const cookies = document.cookie.split(';');
-    for (let cookie of cookies) {
-      const [key, value] = cookie.trim().split('=');
-      if (key === name && value) {
-        console.log('CSRF token found in cookies');
-        return decodeURIComponent(value);
-      }
+    // Load tokens from localStorage on initialization
+    this.accessToken = localStorage.getItem('accessToken');
+    this.refreshToken = localStorage.getItem('refreshToken');
+    this.isRefreshing = false;
+    this.refreshPromise = null;
+    
+    if (this.accessToken) {
+      console.log('🔑 Loaded access token from localStorage');
     }
-    console.log('CSRF token not found in cookies');
-    return null;
   }
 
   /**
-   * Fetch CSRF token from backend
+   * Get access token from localStorage
    */
-  async fetchCsrfToken() {
+  getAccessToken() {
+    if (!this.accessToken) {
+      this.accessToken = localStorage.getItem('accessToken');
+    }
+    return this.accessToken;
+  }
+
+  /**
+   * Get refresh token from localStorage
+   */
+  getRefreshToken() {
+    if (!this.refreshToken) {
+      this.refreshToken = localStorage.getItem('refreshToken');
+    }
+    return this.refreshToken;
+  }
+
+  /**
+   * Set tokens in localStorage and memory
+   */
+  setTokens(access, refresh) {
+    this.accessToken = access;
+    this.refreshToken = refresh;
+    if (access) {
+      localStorage.setItem('accessToken', access);
+    }
+    if (refresh) {
+      localStorage.setItem('refreshToken', refresh);
+    }
+  }
+
+  /**
+   * Clear tokens from localStorage and memory
+   */
+  clearTokens() {
+    this.accessToken = null;
+    this.refreshToken = null;
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+  }
+
+  /**
+   * Refresh access token using refresh token
+   */
+  async refreshAccessToken() {
+    // Prevent multiple simultaneous refresh requests
+    if (this.isRefreshing && this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.isRefreshing = true;
+    this.refreshPromise = this._refreshTokenInternal();
+
     try {
-      const response = await fetch(`${this.baseURL}/auth/csrf-token/`, {
-        method: 'GET',
+      const result = await this.refreshPromise;
+      return result;
+    } finally {
+      this.isRefreshing = false;
+      this.refreshPromise = null;
+    }
+  }
+
+  /**
+   * Internal refresh token implementation
+   */
+  async _refreshTokenInternal() {
+    const refresh = this.getRefreshToken();
+    if (!refresh) {
+      throw new Error('No refresh token available');
+    }
+
+    try {
+      const response = await fetch(`${this.baseURL}/auth/token/refresh/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refresh }),
         credentials: 'include',
       });
-      
-      // CSRF token might be in response header or body
-      let csrfToken = response.headers.get('X-CSRFToken');
-      if (!csrfToken) {
-        try {
-          const data = await response.json();
-          csrfToken = data.csrfToken;
-        } catch (e) {
-          // Ignore JSON parse error
-        }
+
+      if (!response.ok) {
+        throw new Error('Token refresh failed');
       }
-      
-      // Wait a bit for cookie to be set by browser
-      await new Promise(resolve => setTimeout(resolve, 150));
-      
-      // Always try to get from cookies after fetching (most reliable)
-      const cookieToken = this.getCsrfToken();
-      if (cookieToken) {
-        csrfToken = cookieToken;
+
+      const data = await response.json();
+      if (data.access) {
+        this.setTokens(data.access, refresh); // Keep the same refresh token
+        return data.access;
       }
-      
-      console.log('CSRF token fetched:', csrfToken ? 'Token available' : 'No token');
-      return csrfToken;
+      throw new Error('No access token in refresh response');
     } catch (error) {
-      console.warn('Failed to fetch CSRF token:', error);
-      // Try to get from cookies as fallback
-      return this.getCsrfToken();
+      console.error('Token refresh error:', error);
+      this.clearTokens();
+      throw error;
     }
   }
 
   /**
-   * Get default headers with credentials and CSRF token
+   * Get default headers with JWT token
    */
-  async getHeaders(includeContentType = true, isFormData = false, method = 'GET') {
+  async getHeaders(includeContentType = true, isFormData = false) {
     const headers = {};
+
     if (includeContentType && !isFormData) {
       headers['Content-Type'] = 'application/json';
     }
-    
-    // Include CSRF token for state-changing methods
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) {
-      // Always try to get from cookies first (most reliable)
-      let csrfToken = this.getCsrfToken();
-      if (!csrfToken) {
-        // Try to fetch if not available
-        csrfToken = await this.fetchCsrfToken();
-        // After fetching, try cookies again
-        if (!csrfToken) {
-          csrfToken = this.getCsrfToken();
-        }
-      }
-      if (csrfToken) {
-        // Django expects X-CSRFTOKEN (all caps) based on CSRF_HEADER_NAME = 'HTTP_X_CSRFTOKEN'
-        // The HTTP_ prefix is added automatically by Django
-        headers['X-CSRFTOKEN'] = csrfToken;
-        headers['X-CSRFToken'] = csrfToken; // Also try alternative for compatibility
-        console.log('Adding CSRF token to headers');
-      } else {
-        console.warn('No CSRF token available for', method, 'request');
-      }
+
+    // Add JWT token if available
+    const token = this.getAccessToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      console.log('🔑 Adding JWT token to request');
+    } else {
+      console.warn('⚠️ No JWT token available for request');
     }
-    
-    // Include credentials for session-based auth
+
     return {
       ...headers,
       'X-Requested-With': 'XMLHttpRequest',
@@ -104,101 +144,179 @@ class ApiService {
   }
 
   /**
-   * Make authenticated API request
+   * Enhanced request method with automatic token refresh and retry
    */
-  async request(endpoint, options = {}) {
+  async request(endpoint, options = {}, retryCount = 0) {
+    const maxRetries = 2;
     const url = endpoint.startsWith('http') ? endpoint : `${this.baseURL}${endpoint}`;
     const isFormData = options.body instanceof FormData;
     const method = options.method || 'GET';
-    
-    // Get headers with CSRF token
-    const headers = await this.getHeaders(
-      options.body && typeof options.body === 'string' && !isFormData, 
-      isFormData,
-      method
-    );
-    
-    const config = {
-      ...options,
-      headers: {
-        ...headers,
-        ...options.headers,
-      },
-      credentials: 'include', // Include cookies for session auth
-    };
 
     try {
-      const response = await fetch(url, config);
-      
-      // Handle 401 Unauthorized - user needs to login
-      if (response.status === 401) {
-        // Clear any stored auth state
-        localStorage.removeItem('authUser');
-        // Redirect to login if not already there
-        if (!window.location.pathname.includes('/login')) {
-          window.location.href = '/login';
-        }
-        throw new Error('Unauthorized - Please login');
+      // Get headers with JWT token
+      const headers = await this.getHeaders(
+        options.body && typeof options.body === 'string' && !isFormData,
+        isFormData
+      );
+
+      const config = {
+        ...options,
+        headers: {
+          ...headers,
+          ...options.headers,
+        },
+        credentials: 'include', // Include cookies for session fallback
+      };
+
+      // Debug logging
+      if (method !== 'GET') {
+        console.log(`📤 ${method} ${endpoint}`, {
+          hasToken: !!this.getAccessToken(),
+          headers: Object.keys(config.headers)
+        });
       }
 
-      // Handle 403 Forbidden - CSRF token issue
-      if (response.status === 403) {
-        // Try to get CSRF token and retry once
-        const csrfToken = await this.fetchCsrfToken();
-        if (csrfToken && method !== 'GET') {
-          console.log('Retrying request with CSRF token...');
-          // Retry the request with CSRF token (Django expects X-CSRFTOKEN)
-          config.headers['X-CSRFTOKEN'] = csrfToken;
-          config.headers['X-CSRFToken'] = csrfToken; // Also try alternative
-          const retryResponse = await fetch(url, config);
-          if (retryResponse.ok) {
-            return await retryResponse.json();
-          }
+      const response = await fetch(url, config);
+
+      // Handle 401 Unauthorized - token expired or invalid
+      if (response.status === 401 && retryCount < maxRetries) {
+        console.warn('⚠️ 401 Unauthorized - attempting token refresh...');
+        
+        try {
+          // Try to refresh the token
+          await this.refreshAccessToken();
+          
+          // Retry the request with new token
+          console.log('🔄 Retrying request with refreshed token...');
+          return this.request(endpoint, options, retryCount + 1);
+        } catch (refreshError) {
+          console.error('❌ Token refresh failed:', refreshError);
+          // Clear tokens and redirect to login
+          this.clearTokens();
+          localStorage.removeItem('authUser');
+          
+          // Dispatch event for auth context
+          window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+          
+          const error = new Error('Authentication failed - Please login again');
+          error.status = 401;
+          throw error;
         }
-        const errorData = await response.json().catch(() => ({ error: 'CSRF verification failed' }));
-        const error = new Error(errorData.error || errorData.message || 'CSRF verification failed. Please refresh the page.');
+      }
+
+      // Handle 403 Forbidden
+      if (response.status === 403) {
+        const errorData = await response.json().catch(() => ({ error: 'Forbidden' }));
+        const error = new Error(errorData.error || errorData.message || 'Access forbidden');
+        error.response = errorData;
+        error.status = 403;
+        throw error;
+      }
+
+      // Handle 500 Internal Server Error - might be temporary
+      if (response.status === 500 && retryCount < maxRetries) {
+        console.warn('⚠️ 500 Internal Server Error - retrying...');
+        await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+        return this.request(endpoint, options, retryCount + 1);
+      }
+
+      // Handle other errors
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({
+          error: `Request failed with status ${response.status}`,
+        }));
+
+        const errorMessage =
+          errorData.message ||
+          errorData.error ||
+          errorData.detail ||
+          `Request failed with status ${response.status}`;
+
+        const error = new Error(errorMessage);
         error.response = errorData;
         error.status = response.status;
         throw error;
       }
 
-      // Handle other errors
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Request failed' }));
-        // Create a more detailed error message
-        const errorMessage = errorData.message || errorData.error || `Request failed with status ${response.status}`;
-        const error = new Error(errorMessage);
-        error.response = errorData; // Attach full response for detailed error handling
-        error.status = response.status;
-        throw error;
+      // Handle empty responses
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const text = await response.text();
+        if (!text || text.trim() === '') {
+          return null;
+        }
+        try {
+          return JSON.parse(text);
+        } catch (e) {
+          console.warn('Failed to parse JSON response:', e);
+          return text;
+        }
       }
 
-      return await response.json();
+      return await response.text();
     } catch (error) {
-      console.error('API request error:', error);
+      // Network errors - retry with exponential backoff
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        if (retryCount < maxRetries) {
+          console.warn(`⚠️ Network error - retrying (${retryCount + 1}/${maxRetries})...`);
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (retryCount + 1)));
+          return this.request(endpoint, options, retryCount + 1);
+        }
+      }
+
+      console.error('❌ API request error:', {
+        endpoint,
+        method,
+        error: error.message,
+        status: error.status,
+        response: error.response,
+      });
+
       throw error;
     }
   }
 
   // Authentication methods
   async signup(userData) {
-    return this.request('/auth/signup/', {
+    const response = await this.request('/auth/signup/', {
       method: 'POST',
       body: JSON.stringify(userData),
     });
+    
+    // Store tokens if provided
+    if (response.access && response.refresh) {
+      this.setTokens(response.access, response.refresh);
+    }
+    
+    return response;
   }
 
   async signin(credentials) {
-    return this.request('/auth/signin/', {
+    const response = await this.request('/auth/signin/', {
       method: 'POST',
       body: JSON.stringify(credentials),
     });
+    
+    // Store tokens if provided
+    if (response.access && response.refresh) {
+      this.setTokens(response.access, response.refresh);
+    }
+    
+    return response;
   }
 
   async signout() {
-    return this.request('/auth/signout/', {
-      method: 'POST',
-    });
+    try {
+      const refresh = this.getRefreshToken();
+      await this.request('/auth/signout/', {
+        method: 'POST',
+        body: JSON.stringify({ refresh }),
+      });
+    } finally {
+      // Always clear tokens on logout
+      this.clearTokens();
+      localStorage.removeItem('authUser');
+    }
   }
 
   async getCurrentUser() {
@@ -209,8 +327,16 @@ class ApiService {
     return this.request('/auth/check/');
   }
 
-  async getCsrfToken() {
-    return this.request('/auth/csrf-token/');
+  // JWT token management
+  async refreshToken() {
+    return await this.refreshAccessToken();
+  }
+
+  async verifyToken(token) {
+    return this.request('/auth/token/verify/', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
   }
 
   // Workflow methods
@@ -305,4 +431,3 @@ class ApiService {
 
 export const apiService = new ApiService();
 export default apiService;
-

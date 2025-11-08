@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTheme } from '../../theme';
 import { useNavigation } from '../../router/AppRouter';
+import apiService from '../../services/api';
 import { 
   FiMenu, 
   FiGrid, 
@@ -32,6 +33,10 @@ function PageBuilder() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showProjectManager, setShowProjectManager] = useState(false);
   const [importHtml, setImportHtml] = useState('');
+  const [importCss, setImportCss] = useState('');
+  const [importJs, setImportJs] = useState('');
+  const [importTab, setImportTab] = useState('html'); // 'html', 'css', 'js'
+  const [widgetName, setWidgetName] = useState('Custom Widget');
   const [currentProject, setCurrentProject] = useState(null);
   const [projectName, setProjectName] = useState('Untitled Project');
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
@@ -55,9 +60,93 @@ function PageBuilder() {
     }
   }, []);
 
+  // Track if widgets have been loaded to avoid duplicates
+  const widgetsLoadedRef = useRef(false);
+
+  // Load custom widgets from server (defined before handleEditorReady to avoid initialization error)
+  const loadCustomWidgets = useCallback(async (editorInstance) => {
+    if (!editorInstance) return;
+    
+    // Prevent duplicate loading
+    if (widgetsLoadedRef.current) {
+      console.log('Widgets already loaded, skipping...');
+      return;
+    }
+    
+    try {
+      console.log('Loading custom widgets from server...');
+      const response = await apiService.request('/custom-widgets/', {
+        method: 'GET'
+      });
+      
+      console.log('Custom widgets response:', response);
+      
+      if (response && response.widgets && response.widgets.length > 0) {
+        const blocks = editorInstance.Blocks;
+        
+        response.widgets.forEach((widget) => {
+          try {
+            // Check if block already exists to avoid duplicates
+            const existingBlock = blocks.get(widget.block_id);
+            if (existingBlock) {
+              // Block already exists, skip
+              return;
+            }
+            
+            // Combine HTML, CSS, and JS
+            let componentContent = widget.html_content || '';
+            
+            if (widget.css_content) {
+              const cssContent = widget.css_content.trim();
+              if (!cssContent.startsWith('<style')) {
+                componentContent = `<style>${cssContent}</style>${componentContent}`;
+              } else {
+                componentContent = `${cssContent}${componentContent}`;
+              }
+            }
+            
+            if (widget.js_content) {
+              const jsContent = widget.js_content.trim();
+              if (!jsContent.startsWith('<script')) {
+                componentContent = `${componentContent}<script>${jsContent}</script>`;
+              } else {
+                componentContent = `${componentContent}${jsContent}`;
+              }
+            }
+            
+            // Add widget as a block
+            blocks.add(widget.block_id, {
+              label: widget.name,
+              category: 'Custom',
+              media: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>',
+              content: componentContent,
+              attributes: { 
+                class: 'custom-imported-widget',
+                'data-widget-id': widget.block_id
+              }
+            });
+          } catch (err) {
+            console.warn(`Failed to load widget ${widget.name}:`, err);
+          }
+        });
+        
+        widgetsLoadedRef.current = true;
+        console.log(`✅ Loaded ${response.widgets.length} custom widget(s) from server`);
+      } else {
+        console.log('No custom widgets found in response:', response);
+      }
+    } catch (error) {
+      console.warn('Failed to load custom widgets from server:', error);
+      // Continue without widgets - not critical
+    }
+  }, []);
+
   // Save project data to localStorage when it changes
   const handleEditorReady = useCallback((editorInstance) => {
     setEditor(editorInstance);
+    
+    // Reset widgets loaded flag when editor is ready
+    widgetsLoadedRef.current = false;
     
     // Set current project
     const savedProject = localStorage.getItem('gjsProject');
@@ -70,6 +159,32 @@ function PageBuilder() {
         console.error('Error loading project:', error);
       }
     }
+    
+    // Function to load widgets with proper timing
+    const loadWidgetsWithRetry = () => {
+      // Try multiple times to ensure widgets are loaded after project data
+      setTimeout(() => {
+        loadCustomWidgets(editorInstance);
+      }, 300);
+      
+      setTimeout(() => {
+        loadCustomWidgets(editorInstance);
+      }, 800);
+      
+      setTimeout(() => {
+        loadCustomWidgets(editorInstance);
+      }, 1500);
+    };
+    
+    // Load custom widgets after editor and project data are fully loaded
+    // Use the 'load' event which fires after project data is loaded
+    editorInstance.on('load', () => {
+      console.log('Editor load event fired - loading custom widgets');
+      loadWidgetsWithRetry();
+    });
+    
+    // Also try loading widgets on ready (in case load event doesn't fire or already fired)
+    loadWidgetsWithRetry();
     
     // Auto-save on changes
     editorInstance.on('update', () => {
@@ -86,7 +201,7 @@ function PageBuilder() {
         setIsSaved(false);
       }
     });
-  }, [autoSaveEnabled]);
+  }, [autoSaveEnabled, loadCustomWidgets]);
 
   const handleLoadProject = useCallback((project) => {
     if (currentProject?.hasChanges) {
@@ -163,39 +278,110 @@ function PageBuilder() {
     };
   };
 
-  // Handle import HTML
-  const handleImportHtml = useCallback(() => {
-    if (!editor || !importHtml.trim()) return;
+  // Handle import widget with HTML, CSS, and JS
+  const handleImportWidget = useCallback(async () => {
+    if (!editor || !importHtml.trim()) {
+      alert('Please provide at least HTML code to import a widget.');
+      return;
+    }
 
     try {
-      // Add the HTML as a custom block
+      // Combine HTML, CSS, and JS into a complete component
+      let componentContent = importHtml.trim();
+      
+      // Add CSS if provided - wrap in style tag
+      if (importCss.trim()) {
+        const cssContent = importCss.trim();
+        // Check if style tag already exists
+        if (!cssContent.startsWith('<style')) {
+          componentContent = `<style>${cssContent}</style>${componentContent}`;
+        } else {
+          componentContent = `${cssContent}${componentContent}`;
+        }
+      }
+      
+      // Add JS if provided - wrap in script tag
+      if (importJs.trim()) {
+        const jsContent = importJs.trim();
+        // Check if script tag already exists
+        if (!jsContent.startsWith('<script')) {
+          componentContent = `${componentContent}<script>${jsContent}</script>`;
+        } else {
+          componentContent = `${componentContent}${jsContent}`;
+        }
+      }
+
+      // Create a unique block ID
       const blockId = `custom-widget-${Date.now()}`;
-      editor.Blocks.add(blockId, {
-        label: 'Imported Widget',
+      const blockLabel = widgetName.trim() || 'Custom Widget';
+      
+      // Get the Blocks manager from the editor
+      const blocks = editor.Blocks;
+      
+      // Add the component as a custom block that can be dragged and dropped
+      blocks.add(blockId, {
+        label: blockLabel,
         category: 'Custom',
-        media: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-        content: importHtml,
-        attributes: { class: 'custom-imported-widget' }
+        media: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>',
+        content: componentContent,
+        attributes: { 
+          class: 'custom-imported-widget',
+          'data-widget-id': blockId
+        },
+        activate: true,
+        select: true
       });
 
-      // Optionally add it to the canvas immediately
-      editor.addComponents(importHtml);
+      // Save widget to server
+      try {
+        await apiService.request('/custom-widgets/save/', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: blockLabel,
+            html_content: importHtml.trim(),
+            css_content: importCss.trim(),
+            js_content: importJs.trim(),
+            block_id: blockId
+          })
+        });
+        console.log('Widget saved to server successfully');
+      } catch (saveError) {
+        console.warn('Failed to save widget to server:', saveError);
+        // Continue anyway - widget is still added locally
+      }
+
+      // Refresh the blocks panel to show the new block
+      try {
+        // Trigger a refresh of the blocks panel
+        editor.trigger('block:add', blockId);
+        // Also try to refresh the UI
+        if (blocks.render) {
+          blocks.render();
+        }
+      } catch (refreshError) {
+        console.warn('Could not refresh blocks panel:', refreshError);
+        // Continue anyway - the block should still be added
+      }
 
       // Show success notification
       const notification = document.createElement('div');
       notification.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #10b981; color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); z-index: 9999; font-weight: 600;';
-      notification.textContent = '✓ Widget imported successfully!';
+      notification.textContent = `✓ "${blockLabel}" imported successfully! You can now drag it from the "Custom" category in the Blocks panel.`;
       document.body.appendChild(notification);
-      setTimeout(() => notification.remove(), 3000);
+      setTimeout(() => notification.remove(), 5000);
 
       // Reset and close modal
       setImportHtml('');
+      setImportCss('');
+      setImportJs('');
+      setWidgetName('Custom Widget');
+      setImportTab('html');
       setShowImportModal(false);
     } catch (error) {
-      console.error('Error importing HTML:', error);
-      alert('Error importing HTML. Please check the console for details.');
+      console.error('Error importing widget:', error);
+      alert(`Error importing widget: ${error.message}. Please check the console for details.`);
     }
-  }, [editor, importHtml]);
+  }, [editor, importHtml, importCss, importJs, widgetName]);
 
   // Save project handler
   const handleSaveProject = useCallback(() => {
@@ -398,76 +584,20 @@ function PageBuilder() {
 
         {/* Studio Editor */}
         <div className={`page-builder-studio ${theme}`} style={{ width: '100%', height: 'calc(100vh - 60px)' }}>
-          {/* Import HTML Modal */}
-      {showImportModal && (
-        <div className="modal-overlay" onClick={() => setShowImportModal(false)}>
-          <div className="modal-container import-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>Import Custom HTML/Widget</h2>
-              <button className="modal-close" onClick={() => setShowImportModal(false)}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-            <div className="modal-body">
-              <p className="modal-description">
-                Paste your HTML code below. It will be added as a custom block and inserted into the canvas.
-              </p>
-              <textarea
-                className="import-textarea"
-                placeholder="<div>Your HTML code here...</div>"
-                value={importHtml}
-                onChange={(e) => setImportHtml(e.target.value)}
-                rows={15}
-              />
-              <div className="import-examples">
-                <p><strong>Examples:</strong></p>
-                <button 
-                  className="example-btn"
-                  onClick={() => setImportHtml('<div class="bg-blue-500 text-white p-8 rounded-lg text-center">\n  <h2 class="text-3xl font-bold mb-4">Custom Widget</h2>\n  <p class="text-lg">This is a custom imported widget</p>\n</div>')}
-                >
-                  Load Example 1
-                </button>
-                <button 
-                  className="example-btn"
-                  onClick={() => setImportHtml('<section class="py-16 px-4 bg-gradient-to-r from-purple-500 to-pink-500">\n  <div class="container mx-auto text-center text-white">\n    <h1 class="text-5xl font-bold mb-4">Gradient Section</h1>\n    <p class="text-xl">Beautiful gradient background</p>\n  </div>\n</section>')}
-                >
-                  Load Example 2
-                </button>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setShowImportModal(false)}>
-                Cancel
-              </button>
-              <button 
-                className="btn btn-primary" 
-                onClick={handleImportHtml}
-                disabled={!importHtml.trim()}
-              >
-                Import Widget
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          <StudioEditor
+            options={{
+              // Theme configuration
+              theme: theme === 'dark' ? 'dark' : 'light',
+              customTheme: {
+                default: {
+                  colors: getThemeColors()
+                }
+              },
 
-      <StudioEditor
-        options={{
-          // Theme configuration
-          theme: theme === 'dark' ? 'dark' : 'light',
-          customTheme: {
-            default: {
-              colors: getThemeColors()
-            }
-          },
-
-          // Project configuration
-          project: projectData || {
-            type: 'web',
-            default: {
+              // Project configuration
+              project: projectData || {
+                type: 'web',
+                default: {
               pages: [
                 {
                   id: 'home-page',
@@ -1205,6 +1335,205 @@ function PageBuilder() {
             currentProject={currentProject}
           />
         </div>
+
+        {/* Import Widget Modal - Outside Studio Editor to avoid interference */}
+        {showImportModal && (
+          <div className="import-modal-overlay" onClick={() => setShowImportModal(false)}>
+            <div className="import-modal-container" onClick={(e) => e.stopPropagation()}>
+              <div className="import-modal-header">
+                <h2>Import Custom Widget</h2>
+                <button className="import-modal-close" onClick={() => setShowImportModal(false)}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+              <div className="import-modal-body">
+                {/* Widget Name Input */}
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: theme === 'dark' ? '#fff' : '#333' }}>
+                    Widget Name:
+                  </label>
+                  <input
+                    type="text"
+                    value={widgetName}
+                    onChange={(e) => setWidgetName(e.target.value)}
+                    placeholder="Enter widget name"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                      backgroundColor: theme === 'dark' ? '#2a2a2a' : '#fff',
+                      color: theme === 'dark' ? '#fff' : '#333',
+                      fontSize: '14px'
+                    }}
+                  />
+                </div>
+
+                {/* Tabs */}
+                <div style={{ 
+                  display: 'flex', 
+                  borderBottom: `2px solid ${theme === 'dark' ? '#444' : '#e0e0e0'}`,
+                  marginBottom: '16px'
+                }}>
+                  {['html', 'css', 'js'].map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setImportTab(tab)}
+                      style={{
+                        padding: '12px 24px',
+                        border: 'none',
+                        background: 'transparent',
+                        color: importTab === tab 
+                          ? (theme === 'dark' ? '#a855f7' : '#7c3aed')
+                          : (theme === 'dark' ? '#999' : '#666'),
+                        fontWeight: importTab === tab ? '600' : '400',
+                        cursor: 'pointer',
+                        borderBottom: importTab === tab 
+                          ? `3px solid ${theme === 'dark' ? '#a855f7' : '#7c3aed'}`
+                          : '3px solid transparent',
+                        textTransform: 'uppercase',
+                        fontSize: '13px',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {tab.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tab Content */}
+                <div style={{ position: 'relative' }}>
+                  {/* HTML Tab */}
+                  {importTab === 'html' && (
+                    <div>
+                      <p className="modal-description" style={{ marginBottom: '12px', color: theme === 'dark' ? '#aaa' : '#666' }}>
+                        Paste your HTML code. This will be the structure of your widget.
+                      </p>
+                      <textarea
+                        className="import-textarea"
+                        placeholder="<div>Your HTML code here...</div>"
+                        value={importHtml}
+                        onChange={(e) => setImportHtml(e.target.value)}
+                        rows={15}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          borderRadius: '6px',
+                          border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                          backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                          color: theme === 'dark' ? '#fff' : '#333',
+                          fontFamily: 'monospace',
+                          fontSize: '13px',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {/* CSS Tab */}
+                  {importTab === 'css' && (
+                    <div>
+                      <p className="modal-description" style={{ marginBottom: '12px', color: theme === 'dark' ? '#aaa' : '#666' }}>
+                        Add custom CSS styles for your widget. (Optional)
+                      </p>
+                      <textarea
+                        className="import-textarea"
+                        placeholder=".my-widget { color: blue; }"
+                        value={importCss}
+                        onChange={(e) => setImportCss(e.target.value)}
+                        rows={15}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          borderRadius: '6px',
+                          border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                          backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                          color: theme === 'dark' ? '#fff' : '#333',
+                          fontFamily: 'monospace',
+                          fontSize: '13px',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {/* JS Tab */}
+                  {importTab === 'js' && (
+                    <div>
+                      <p className="modal-description" style={{ marginBottom: '12px', color: theme === 'dark' ? '#aaa' : '#666' }}>
+                        Add JavaScript functionality for your widget. (Optional)
+                      </p>
+                      <textarea
+                        className="import-textarea"
+                        placeholder="// Your JavaScript code here\ndocument.addEventListener('DOMContentLoaded', function() {\n  // Widget initialization\n});"
+                        value={importJs}
+                        onChange={(e) => setImportJs(e.target.value)}
+                        rows={15}
+                        style={{
+                          width: '100%',
+                          padding: '12px',
+                          borderRadius: '6px',
+                          border: `1px solid ${theme === 'dark' ? '#444' : '#ddd'}`,
+                          backgroundColor: theme === 'dark' ? '#1a1a1a' : '#fff',
+                          color: theme === 'dark' ? '#fff' : '#333',
+                          fontFamily: 'monospace',
+                          fontSize: '13px',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="import-modal-footer">
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setShowImportModal(false);
+                    setImportHtml('');
+                    setImportCss('');
+                    setImportJs('');
+                    setWidgetName('Custom Widget');
+                    setImportTab('html');
+                  }}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: theme === 'dark' ? '#444' : '#e0e0e0',
+                    color: theme === 'dark' ? '#fff' : '#333',
+                    cursor: 'pointer',
+                    fontWeight: '500'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={handleImportWidget}
+                  disabled={!importHtml.trim()}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: !importHtml.trim() 
+                      ? (theme === 'dark' ? '#444' : '#ccc')
+                      : (theme === 'dark' ? '#a855f7' : '#7c3aed'),
+                    color: '#fff',
+                    cursor: !importHtml.trim() ? 'not-allowed' : 'pointer',
+                    fontWeight: '600',
+                    opacity: !importHtml.trim() ? 0.6 : 1
+                  }}
+                >
+                  Import Widget
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

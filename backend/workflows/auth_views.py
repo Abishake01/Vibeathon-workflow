@@ -9,6 +9,8 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.middleware.csrf import get_token
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
 import secrets
 from .serializers import UserSerializer, UserRegistrationSerializer
 
@@ -16,7 +18,7 @@ from .serializers import UserSerializer, UserRegistrationSerializer
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def signup(request):
-    """User registration endpoint"""
+    """User registration endpoint - returns JWT tokens"""
     try:
         # Handle both snake_case and camelCase field names
         data = request.data.copy()
@@ -34,10 +36,18 @@ def signup(request):
         
         if serializer.is_valid():
             user = serializer.save()
-            # Automatically log in the user after registration
+            
+            # Create JWT tokens
+            refresh = RefreshToken.for_user(user)
+            access_token = refresh.access_token
+            
+            # Automatically log in the user after registration (for session-based auth backward compatibility)
             login(request, user)
+            
             return Response({
                 'user': UserSerializer(user).data,
+                'access': str(access_token),
+                'refresh': str(refresh),
                 'message': 'User registered successfully'
             }, status=status.HTTP_201_CREATED)
         
@@ -70,7 +80,7 @@ def signup(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def signin(request):
-    """User login endpoint"""
+    """User login endpoint - returns JWT tokens"""
     username = request.data.get('username')
     password = request.data.get('password')
     
@@ -82,9 +92,17 @@ def signin(request):
     user = authenticate(request, username=username, password=password)
     
     if user is not None:
+        # Create JWT tokens
+        refresh = RefreshToken.for_user(user)
+        access_token = refresh.access_token
+        
+        # Also login for session-based auth (backward compatibility)
         login(request, user)
+        
         return Response({
             'user': UserSerializer(user).data,
+            'access': str(access_token),
+            'refresh': str(refresh),
             'message': 'Login successful'
         }, status=status.HTTP_200_OK)
     else:
@@ -94,10 +112,25 @@ def signin(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])  # Allow logout even without valid token
 def signout(request):
-    """User logout endpoint"""
-    logout(request)
+    """User logout endpoint - blacklists refresh token if provided"""
+    try:
+        # Try to get refresh token from request
+        refresh_token = request.data.get('refresh')
+        if refresh_token:
+            try:
+                token = RefreshToken(refresh_token)
+                token.blacklist()  # Blacklist the refresh token
+            except Exception as e:
+                print(f"Token blacklist error (non-critical): {e}")
+    except Exception as e:
+        print(f"Logout token handling error (non-critical): {e}")
+    
+    # Also logout session if authenticated
+    if request.user.is_authenticated:
+        logout(request)
+    
     return Response({
         'message': 'Logout successful'
     }, status=status.HTTP_200_OK)
@@ -115,24 +148,21 @@ def get_current_user(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def check_auth(request):
-    """Check if user is authenticated and ensure CSRF cookie is set"""
-    csrf_token = None
-    try:
-        # Ensure CSRF token is available - this will set the cookie
-        csrf_token = get_token(request)
-    except Exception as e:
-        print(f"⚠️ CSRF token error in check_auth: {str(e)}")
-        # Generate a fallback token
-        csrf_token = secrets.token_urlsafe(32)
-    
-    # If still no token, generate one
-    if not csrf_token:
-        csrf_token = secrets.token_urlsafe(32)
-    
+    """Check if user is authenticated - supports both JWT and session auth"""
     response_data = {
         'authenticated': False
     }
     
+    # Try JWT authentication first
+    jwt_auth = JWTAuthentication()
+    try:
+        user, token = jwt_auth.authenticate(request)
+        if user:
+            request.user = user
+    except Exception:
+        pass  # JWT auth failed, try session auth
+    
+    # Check if user is authenticated (either via JWT or session)
     if request.user.is_authenticated:
         try:
             response_data = {
@@ -152,26 +182,7 @@ def check_auth(request):
                 }
             }
     
-    response = Response(response_data, status=status.HTTP_200_OK)
-    # Set CSRF token in response header for frontend to read
-    if csrf_token:
-        response['X-CSRFToken'] = csrf_token
-        # Also set the cookie
-        from django.conf import settings
-        try:
-            response.set_cookie(
-                settings.CSRF_COOKIE_NAME,
-                csrf_token,
-                max_age=settings.CSRF_COOKIE_AGE if hasattr(settings, 'CSRF_COOKIE_AGE') else 31449600,
-                domain=settings.CSRF_COOKIE_DOMAIN if hasattr(settings, 'CSRF_COOKIE_DOMAIN') else None,
-                path=settings.CSRF_COOKIE_PATH if hasattr(settings, 'CSRF_COOKIE_PATH') else '/',
-                secure=settings.CSRF_COOKIE_SECURE if hasattr(settings, 'CSRF_COOKIE_SECURE') else False,
-                samesite=settings.CSRF_COOKIE_SAMESITE if hasattr(settings, 'CSRF_COOKIE_SAMESITE') else 'Lax',
-                httponly=settings.CSRF_COOKIE_HTTPONLY if hasattr(settings, 'CSRF_COOKIE_HTTPONLY') else False
-            )
-        except Exception as e:
-            print(f"⚠️ Failed to set CSRF cookie in check_auth: {str(e)}")
-    return response
+    return Response(response_data, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

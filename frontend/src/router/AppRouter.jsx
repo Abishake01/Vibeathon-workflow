@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import WorkflowBuilder from '../components/workflow/WorkflowBuilder';
 import PageBuilder from '../components/ui-builder/PageBuilder';
@@ -22,9 +22,10 @@ export const useNavigation = () => {
   return context;
 };
 
-// Protected Route Component
+// Protected Route Component - Redirects unauthenticated users to login
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -42,7 +43,35 @@ const ProtectedRoute = ({ children }) => {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Save the attempted location so we can redirect back after login
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  return children;
+};
+
+// Public Route Component - Redirects authenticated users away from login/signup
+const PublicRoute = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="app-router" style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        height: '100vh',
+        background: '#ffffff',
+        color: '#000000'
+      }}>
+        <div style={{ fontSize: '16px', fontWeight: 500 }}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (isAuthenticated) {
+    // If already authenticated, redirect to home
+    return <Navigate to="/" replace />;
   }
 
   return children;
@@ -66,11 +95,25 @@ function AppRouter() {
   return (
     <NavigationContext.Provider value={{ activeTab, navigateToBuilder }}>
       <Routes>
-        {/* Public routes */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
+        {/* Public routes - redirect to home if already authenticated */}
+        <Route 
+          path="/login" 
+          element={
+            <PublicRoute>
+              <Login />
+            </PublicRoute>
+          } 
+        />
+        <Route 
+          path="/signup" 
+          element={
+            <PublicRoute>
+              <Signup />
+            </PublicRoute>
+          } 
+        />
         
-        {/* Protected routes */}
+        {/* Protected routes - redirect to login if not authenticated */}
         <Route
           path="/"
           element={
@@ -83,8 +126,15 @@ function AppRouter() {
           }
         />
         
-        {/* Redirect unknown routes to home */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Redirect unknown routes - protected, so will redirect to login if not authenticated */}
+        <Route 
+          path="*" 
+          element={
+            <ProtectedRoute>
+              <Navigate to="/" replace />
+            </ProtectedRoute>
+          } 
+        />
       </Routes>
     </NavigationContext.Provider>
   );

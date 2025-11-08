@@ -3,11 +3,13 @@ URL configuration for workflows app
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 from .views import (
     WorkflowViewSet, WorkflowExecutionViewSet, CredentialViewSet, 
     ExportedWorkflowViewSet, trigger_chat, test_api_key, ai_chat,
     export_workflow, get_exported_workflow, get_available_memory_types,
-    test_memory_connection, get_memory_statistics
+    test_memory_connection, get_memory_statistics,
+    save_custom_widget, get_custom_widgets, delete_custom_widget
 )
 from .auth_views import signup, signin, signout, get_current_user, check_auth, get_csrf_token
 from .ui_builder_views import UIBuilderProjectViewSet
@@ -28,6 +30,9 @@ urlpatterns = [
     path('auth/signout/', signout, name='signout'),
     path('auth/me/', get_current_user, name='get-current-user'),
     path('auth/check/', check_auth, name='check-auth'),
+    # JWT token endpoints
+    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('auth/token/verify/', TokenVerifyView.as_view(), name='token-verify'),
     
     # Workflow endpoints
     path('test-api-key/', test_api_key, name='test-api-key'),
@@ -45,6 +50,11 @@ urlpatterns = [
     path('ui-assets/upload/', upload_asset, name='upload-asset'),
     path('ui-assets/', list_assets, name='list-assets'),
     path('ui-assets/<str:filename>/', delete_asset, name='delete-asset'),
+    
+    # Custom Widget endpoints
+    path('custom-widgets/', get_custom_widgets, name='get-custom-widgets'),
+    path('custom-widgets/save/', save_custom_widget, name='save-custom-widget'),
+    path('custom-widgets/<uuid:widget_id>/', delete_custom_widget, name='delete-custom-widget'),
     
     # Router URLs
     path('', include(router.urls)),

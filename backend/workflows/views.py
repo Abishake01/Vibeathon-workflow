@@ -2,9 +2,13 @@
 Django REST Framework views for workflows
 """
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.decorators import action, api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.authentication import SessionAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from django.shortcuts import get_object_or_404
 from django.db import models
 import uuid
@@ -13,7 +17,7 @@ import os
 import time
 from asgiref.sync import async_to_sync
 
-from .models import Workflow, WorkflowExecution, Credential, ExportedWorkflow
+from .models import Workflow, WorkflowExecution, Credential, ExportedWorkflow, CustomWidget
 from .serializers import (
     WorkflowSerializer,
     WorkflowExecutionSerializer,
@@ -22,7 +26,8 @@ from .serializers import (
     ExecuteNodeSerializer,
     ExportedWorkflowSerializer,
     ExportedWorkflowCreateSerializer,
-    ExportedWorkflowListSerializer
+    ExportedWorkflowListSerializer,
+    CustomWidgetSerializer
 )
 from .execution_engine import execution_engine
 
@@ -31,6 +36,8 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     """ViewSet for Workflow CRUD operations"""
     queryset = Workflow.objects.all()
     serializer_class = WorkflowSerializer
+    authentication_classes = [JWTAuthentication, SessionAuthentication]  # JWT first, then session
+    permission_classes = [IsAuthenticated]  # Require authentication
     
     def get_queryset(self):
         """Filter workflows by authenticated user"""
@@ -203,6 +210,8 @@ class WorkflowExecutionViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for viewing workflow execution history"""
     queryset = WorkflowExecution.objects.all()
     serializer_class = WorkflowExecutionSerializer
+    authentication_classes = [JWTAuthentication, SessionAuthentication]  # JWT first, then session
+    permission_classes = [IsAuthenticated]  # Require authentication
     
     def get_queryset(self):
         """Filter executions by authenticated user's workflows"""
@@ -239,6 +248,8 @@ class CredentialViewSet(viewsets.ModelViewSet):
     """ViewSet for managing credentials"""
     queryset = Credential.objects.all()
     serializer_class = CredentialSerializer
+    authentication_classes = [JWTAuthentication, SessionAuthentication]  # JWT first, then session
+    permission_classes = [IsAuthenticated]  # Require authentication
     
     def get_queryset(self):
         """Filter credentials by authenticated user"""
@@ -476,6 +487,8 @@ Be friendly, helpful, and provide clear, concise answers."""
 
 
 @api_view(['GET', 'POST'])
+@authentication_classes([])  # Disable authentication (and CSRF requirement) for this endpoint
+@permission_classes([AllowAny])  # Allow testing API keys without authentication
 def test_api_key(request):
     """Test API key validity for a specific node type"""
     print(f"🔍 Test API key endpoint called with method: {request.method}")
@@ -589,6 +602,7 @@ class ExportedWorkflowViewSet(viewsets.ModelViewSet):
     """ViewSet for ExportedWorkflow CRUD operations"""
     queryset = ExportedWorkflow.objects.all()
     serializer_class = ExportedWorkflowSerializer
+    authentication_classes = [JWTAuthentication, SessionAuthentication]  # JWT first, then session
     
     def get_serializer_class(self):
         """Return appropriate serializer based on action"""
@@ -905,4 +919,115 @@ def get_memory_statistics(request):
     except Exception as e:
         return Response({
             'error': f'Failed to get memory statistics: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@authentication_classes([])  # Disable authentication (and CSRF requirement) for this endpoint
+@permission_classes([AllowAny])  # Allow saving widgets without authentication
+def save_custom_widget(request):
+    """Save a custom widget to the database"""
+    try:
+        data = request.data
+        name = data.get('name')
+        html_content = data.get('html_content', '')
+        css_content = data.get('css_content', '')
+        js_content = data.get('js_content', '')
+        block_id = data.get('block_id')
+        
+        if not name or not html_content or not block_id:
+            return Response({
+                'error': 'name, html_content, and block_id are required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if widget with this block_id already exists for this user
+        user = request.user if request.user.is_authenticated else None
+        existing_widget = CustomWidget.objects.filter(
+            user=user,
+            block_id=block_id
+        ).first()
+        
+        if existing_widget:
+            # Update existing widget
+            existing_widget.name = name
+            existing_widget.html_content = html_content
+            existing_widget.css_content = css_content
+            existing_widget.js_content = js_content
+            existing_widget.save()
+            serializer = CustomWidgetSerializer(existing_widget)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        else:
+            # Create new widget
+            widget = CustomWidget.objects.create(
+                user=user,
+                name=name,
+                html_content=html_content,
+                css_content=css_content,
+                js_content=js_content,
+                block_id=block_id
+            )
+            serializer = CustomWidgetSerializer(widget)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+    except Exception as e:
+        return Response({
+            'error': f'Failed to save widget: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])  # Allow getting widgets without authentication
+def get_custom_widgets(request):
+    """Get all custom widgets for the current user"""
+    try:
+        if request.user.is_authenticated:
+            # Return widgets for authenticated user
+            widgets = CustomWidget.objects.filter(user=request.user)
+        else:
+            # Return anonymous widgets (user=None) for unauthenticated users
+            widgets = CustomWidget.objects.filter(user=None)
+        
+        serializer = CustomWidgetSerializer(widgets, many=True)
+        return Response({
+            'widgets': serializer.data,
+            'count': len(serializer.data)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'error': f'Failed to get widgets: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['DELETE'])
+@authentication_classes([])  # Disable authentication (and CSRF requirement) for this endpoint
+@permission_classes([AllowAny])  # Allow deleting widgets without authentication
+def delete_custom_widget(request, widget_id):
+    """Delete a custom widget"""
+    try:
+        widget = get_object_or_404(CustomWidget, id=widget_id)
+        
+        # Security check: 
+        # - If widget belongs to a user, only that user can delete it
+        # - If widget is anonymous (user=None), anyone can delete it
+        if widget.user is not None:
+            # Widget belongs to a user - require authentication and ownership
+            if not request.user.is_authenticated:
+                return Response({
+                    'error': 'Authentication required to delete this widget'
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            
+            if widget.user != request.user:
+                return Response({
+                    'error': 'You do not have permission to delete this widget'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        widget.delete()
+        return Response({
+            'message': 'Widget deleted successfully'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'error': f'Failed to delete widget: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

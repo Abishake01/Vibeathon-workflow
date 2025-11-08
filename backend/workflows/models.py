@@ -195,3 +195,28 @@ class UIBuilderProject(models.Model):
     
     def __str__(self):
         return f"{self.project_name} - {self.user.username if self.user else 'Anonymous'}"
+
+
+class CustomWidget(models.Model):
+    """Custom imported widget model for UI Builder"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='custom_widgets', null=True, blank=True)
+    name = models.CharField(max_length=255)
+    html_content = models.TextField()
+    css_content = models.TextField(blank=True)
+    js_content = models.TextField(blank=True)
+    block_id = models.CharField(max_length=255)  # Block ID for GrapesJS (unique per user)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['block_id']),
+        ]
+        # Make block_id unique per user
+        unique_together = [['user', 'block_id']]
+    
+    def __str__(self):
+        return f"{self.name} - {self.user.username if self.user else 'Anonymous'}"

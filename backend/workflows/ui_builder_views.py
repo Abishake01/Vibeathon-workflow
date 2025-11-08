@@ -5,6 +5,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import SessionAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from .models import UIBuilderProject
 from .serializers import UIBuilderProjectSerializer
 
@@ -13,6 +15,7 @@ class UIBuilderProjectViewSet(viewsets.ModelViewSet):
     """ViewSet for UIBuilderProject CRUD operations"""
     queryset = UIBuilderProject.objects.all()
     serializer_class = UIBuilderProjectSerializer
+    authentication_classes = [JWTAuthentication, SessionAuthentication]  # JWT first, then session
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
