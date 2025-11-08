@@ -941,7 +941,26 @@ def save_custom_widget(request):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if widget with this block_id already exists for this user
-        user = request.user if request.user.is_authenticated else None
+        # Try to get authenticated user, otherwise use None
+        user = None
+        try:
+            # Try JWT authentication first
+            from rest_framework_simplejwt.authentication import JWTAuthentication
+            jwt_auth = JWTAuthentication()
+            try:
+                auth_user, token = jwt_auth.authenticate(request)
+                if auth_user:
+                    user = auth_user
+            except Exception:
+                pass
+            
+            # Fallback to session authentication
+            if not user and request.user.is_authenticated:
+                user = request.user
+        except Exception:
+            pass
+        
+        # Check for existing widget with this block_id for this user (or anonymous)
         existing_widget = CustomWidget.objects.filter(
             user=user,
             block_id=block_id
@@ -980,20 +999,44 @@ def save_custom_widget(request):
 def get_custom_widgets(request):
     """Get all custom widgets for the current user"""
     try:
-        if request.user.is_authenticated:
-            # Return widgets for authenticated user
-            widgets = CustomWidget.objects.filter(user=request.user)
+        # Try to get authenticated user (JWT or session)
+        user = None
+        try:
+            # Try JWT authentication first
+            from rest_framework_simplejwt.authentication import JWTAuthentication
+            jwt_auth = JWTAuthentication()
+            try:
+                auth_user, token = jwt_auth.authenticate(request)
+                if auth_user:
+                    user = auth_user
+            except Exception:
+                pass
+            
+            # Fallback to session authentication
+            if not user and request.user.is_authenticated:
+                user = request.user
+        except Exception:
+            pass
+        
+        if user:
+            # Return widgets for authenticated user AND anonymous widgets
+            # This allows authenticated users to see their own widgets plus any anonymous widgets
+            widgets = CustomWidget.objects.filter(
+                models.Q(user=user) | models.Q(user=None)
+            )
         else:
             # Return anonymous widgets (user=None) for unauthenticated users
             widgets = CustomWidget.objects.filter(user=None)
         
         serializer = CustomWidgetSerializer(widgets, many=True)
+        print(f"📦 Returning {len(serializer.data)} widget(s) for user: {user.username if user else 'Anonymous'}")
         return Response({
             'widgets': serializer.data,
             'count': len(serializer.data)
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
+        print(f"❌ Error getting widgets: {str(e)}")
         return Response({
             'error': f'Failed to get widgets: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

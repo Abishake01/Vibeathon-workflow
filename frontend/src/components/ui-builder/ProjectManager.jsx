@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import apiService from '../../services/api';
 import './ProjectManager.css';
 
 function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
@@ -8,24 +9,59 @@ function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
 
   useEffect(() => {
     if (isOpen) {
+      // Always reload projects when modal opens to get latest data
       loadProjects();
+      // Prevent body scroll when modal is open
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
     }
-  }, [isOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, sortBy]); // Reload when sortBy changes too
 
-  const loadProjects = () => {
+  const loadProjects = async () => {
     const savedProjects = [];
     
-    // Load all projects from localStorage
+    // First, try to load from server
+    try {
+      const serverProjects = await apiService.request('/ui-projects/', { method: 'GET' });
+      if (serverProjects && Array.isArray(serverProjects)) {
+        serverProjects.forEach(project => {
+          savedProjects.push({
+            ...project,
+            id: project.id,
+            name: project.project_name,
+            projectName: project.project_name,
+            savedAt: project.updated_at || project.created_at,
+            serverId: project.id,
+            // Convert server format to GrapesJS format
+            components: project.components || {},
+            styles: project.styles || {},
+            assets: project.assets || []
+          });
+        });
+      }
+    } catch (error) {
+      console.warn('Could not load projects from server (might not be authenticated):', error);
+      // Continue with localStorage projects
+    }
+    
+    // Also load from localStorage (for offline projects or projects not yet saved to server)
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith('gjsProject_')) {
         try {
           const projectData = JSON.parse(localStorage.getItem(key));
-          savedProjects.push({
-            ...projectData,
-            id: key,
-            name: projectData.projectName || key.replace('gjsProject_', '')
-          });
+          // Only add if not already in list (avoid duplicates)
+          if (!savedProjects.find(p => p.id === key || p.serverId === projectData.serverId)) {
+            savedProjects.push({
+              ...projectData,
+              id: key,
+              name: projectData.projectName || key.replace('gjsProject_', ''),
+              projectName: projectData.projectName || key.replace('gjsProject_', '')
+            });
+          }
         } catch (error) {
           console.error('Error loading project:', key, error);
         }
@@ -37,11 +73,15 @@ function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
     if (defaultProject) {
       try {
         const projectData = JSON.parse(defaultProject);
-        savedProjects.push({
-          ...projectData,
-          id: 'gjsProject',
-          name: projectData.projectName || 'Default Project'
-        });
+        // Only add if not already in list
+        if (!savedProjects.find(p => p.id === 'gjsProject' || p.serverId === projectData.serverId)) {
+          savedProjects.push({
+            ...projectData,
+            id: 'gjsProject',
+            name: projectData.projectName || 'Default Project',
+            projectName: projectData.projectName || 'Default Project'
+          });
+        }
       } catch (error) {
         console.error('Error loading default project:', error);
       }
@@ -50,9 +90,13 @@ function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
     // Sort projects
     savedProjects.sort((a, b) => {
       if (sortBy === 'date') {
-        return new Date(b.savedAt || 0) - new Date(a.savedAt || 0);
+        const dateA = new Date(a.savedAt || a.updated_at || a.created_at || 0);
+        const dateB = new Date(b.savedAt || b.updated_at || b.created_at || 0);
+        return dateB - dateA;
       } else {
-        return a.name.localeCompare(b.name);
+        const nameA = a.projectName || a.project_name || a.name || '';
+        const nameB = b.projectName || b.project_name || b.name || '';
+        return nameA.localeCompare(nameB);
       }
     });
 
@@ -69,10 +113,24 @@ function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
     onLoadProject(project);
   };
 
-  const handleDeleteProject = (projectId, e) => {
+  const handleDeleteProject = async (projectId, e) => {
     e.stopPropagation();
     
     if (confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
+      // Find the project to check if it has a server ID
+      const project = projects.find(p => p.id === projectId);
+      
+      // Delete from server if it exists there
+      if (project && project.serverId) {
+        try {
+          await apiService.deleteUIProject(project.serverId);
+          console.log('✅ Project deleted from server');
+        } catch (error) {
+          console.warn('⚠️ Could not delete from server:', error);
+        }
+      }
+      
+      // Delete from localStorage
       localStorage.removeItem(projectId);
       loadProjects();
     }
@@ -132,8 +190,28 @@ function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container project-manager-modal" onClick={(e) => e.stopPropagation()}>
+    <div 
+      className="modal-overlay project-manager-overlay" 
+      onClick={onClose}
+      style={{ 
+        pointerEvents: 'auto',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 999999
+      }}
+    >
+      <div 
+        className="modal-container project-manager-modal" 
+        onClick={(e) => e.stopPropagation()}
+        style={{ 
+          pointerEvents: 'auto',
+          position: 'relative',
+          zIndex: 999999
+        }}
+      >
         <div className="modal-header">
           <div className="modal-title">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -196,20 +274,26 @@ function ProjectManager({ isOpen, onClose, onLoadProject, currentProject }) {
               filteredProjects.map(project => (
                 <div
                   key={project.id}
-                  className={`project-card ${currentProject?.projectName === project.name ? 'active' : ''}`}
+                  className={`project-card ${(currentProject?.projectName === project.projectName || currentProject?.projectName === project.name) ? 'active' : ''}`}
                   onClick={() => handleLoadProject(project)}
                 >
                   <div className="project-info">
-                    <h3 className="project-name">{project.name || 'Untitled Project'}</h3>
+                    <h3 className="project-name">{project.projectName || project.name || 'Untitled Project'}</h3>
                     <div className="project-meta">
                       <span className="project-date">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <circle cx="12" cy="12" r="10"/>
                           <polyline points="12 6 12 12 16 14"/>
                         </svg>
-                        {project.savedAt ? new Date(project.savedAt).toLocaleDateString() : 'No date'}
+                        {project.savedAt ? new Date(project.savedAt).toLocaleDateString('en-US', { 
+                          year: 'numeric', 
+                          month: 'short', 
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        }) : 'No date'}
                       </span>
-                      {currentProject?.projectName === project.name && (
+                      {(currentProject?.projectName === project.projectName || currentProject?.projectName === project.name) && (
                         <span className="current-badge">Current</span>
                       )}
                     </div>

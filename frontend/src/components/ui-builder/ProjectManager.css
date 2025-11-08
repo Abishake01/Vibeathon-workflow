@@ -1,6 +1,41 @@
+/* Project Manager Modal - Isolated from editor */
 .project-manager-modal {
-  max-width: 800px;
+  max-width: 900px;
   width: 90%;
+  position: relative;
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Ensure modal overlay is above everything - highest z-index */
+.modal-overlay.project-manager-overlay {
+  z-index: 999999 !important;
+  background: rgba(0, 0, 0, 0.8) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  isolation: isolate;
+}
+
+/* Ensure modal container is also isolated */
+.modal-container.project-manager-modal {
+  z-index: 999999 !important;
+  position: relative !important;
+  isolation: isolate;
 }
 
 .modal-title {
@@ -16,24 +51,44 @@
 .project-toolbar {
   display: flex;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
   flex-wrap: wrap;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.dark .project-toolbar {
+  border-bottom-color: #3f3f3f;
 }
 
 .search-input {
   flex: 1;
   min-width: 200px;
-  padding: 10px 16px;
+  padding: 12px 16px;
   border: 2px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 14px;
-  transition: all 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: #f9fafb;
 }
 
 .search-input:focus {
   outline: none;
   border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  background: white;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+  transform: translateY(-1px);
+}
+
+.dark .search-input {
+  background: #1f1f1f;
+  border-color: #3f3f3f;
+  color: #f3f4f6;
+}
+
+.dark .search-input:focus {
+  background: #272727;
+  border-color: #3b82f6;
 }
 
 .toolbar-actions {
@@ -43,17 +98,31 @@
 }
 
 .sort-select {
-  padding: 10px 16px;
+  padding: 12px 16px;
   border: 2px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 14px;
-  background: white;
+  background: #f9fafb;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 500;
 }
 
 .sort-select:focus {
   outline: none;
+  border-color: #3b82f6;
+  background: white;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+}
+
+.dark .sort-select {
+  background: #1f1f1f;
+  border-color: #3f3f3f;
+  color: #f3f4f6;
+}
+
+.dark .sort-select:focus {
+  background: #272727;
   border-color: #3b82f6;
 }
 
@@ -69,29 +138,84 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding-right: 4px;
+}
+
+/* Custom scrollbar for projects list */
+.projects-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.projects-list::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+.projects-list::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.projects-list::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.dark .projects-list::-webkit-scrollbar-track {
+  background: #1f1f1f;
+}
+
+.dark .projects-list::-webkit-scrollbar-thumb {
+  background: #3f3f3f;
+}
+
+.dark .projects-list::-webkit-scrollbar-thumb:hover {
+  background: #4f4f4f;
 }
 
 .project-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px;
+  padding: 20px;
   border: 2px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: 12px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   background: white;
+  position: relative;
+  overflow: hidden;
+}
+
+.project-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: #3b82f6;
+  transform: scaleY(0);
+  transition: transform 0.3s ease;
 }
 
 .project-card:hover {
   border-color: #3b82f6;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 16px rgba(59, 130, 246, 0.15);
   transform: translateY(-2px);
+}
+
+.project-card:hover::before {
+  transform: scaleY(1);
 }
 
 .project-card.active {
   border-color: #3b82f6;
-  background: #eff6ff;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+}
+
+.project-card.active::before {
+  transform: scaleY(1);
 }
 
 .project-info {
@@ -134,26 +258,37 @@
 }
 
 .action-btn {
-  padding: 8px;
+  padding: 10px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   color: #6b7280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .action-btn:hover {
   background: #f3f4f6;
   color: #111827;
+  transform: scale(1.1);
 }
 
 .export-btn:hover {
   color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
 }
 
 .delete-btn:hover {
   color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.dark .action-btn:hover {
+  background: #3f3f3f;
+  color: #f3f4f6;
 }
 
 .empty-state {

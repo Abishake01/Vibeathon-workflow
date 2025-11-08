@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useTheme } from '../../theme';
 import { useNavigation } from '../../router/AppRouter';
 import apiService from '../../services/api';
@@ -39,50 +40,108 @@ function PageBuilder() {
   const [widgetName, setWidgetName] = useState('Custom Widget');
   const [currentProject, setCurrentProject] = useState(null);
   const [projectName, setProjectName] = useState('Untitled Project');
+  const [serverProjectId, setServerProjectId] = useState(null); // Track server project ID
+  const projectNameRef = useRef('Untitled Project'); // Ref to access current project name in callbacks
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [isSaved, setIsSaved] = useState(true);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const { toggleTheme } = useTheme();
-
-  // Load project data from localStorage on mount
+  
+  // Keep ref in sync with state
   useEffect(() => {
-    const savedProject = localStorage.getItem('gjsProject');
-    if (savedProject) {
+    projectNameRef.current = projectName;
+  }, [projectName]);
+
+  // Load project data from localStorage and server on mount
+  useEffect(() => {
+    const loadProject = async () => {
       try {
-        const project = JSON.parse(savedProject);
-        if (project.pages) {
-          setProjectData(project);
+        // First, try to load from localStorage (for quick access)
+        const savedProject = localStorage.getItem('gjsProject');
+        if (savedProject) {
+          try {
+            const project = JSON.parse(savedProject);
+            if (project.pages) {
+              setProjectData(project);
+            }
+            setCurrentProject({ projectName: project.projectName || 'Untitled Project', hasChanges: false });
+            setProjectName(project.projectName || 'Untitled Project');
+            setServerProjectId(project.serverId || null);
+            projectNameRef.current = project.projectName || 'Untitled Project';
+          } catch (error) {
+            console.error('Error loading project from localStorage:', error);
+          }
         }
-              } catch (error) {
+        
+        // Then, try to sync with server (load latest projects)
+        try {
+          const serverProjects = await apiService.request('/ui-projects/', { method: 'GET' });
+          if (serverProjects && serverProjects.length > 0) {
+            // If we have a server project ID, use that project
+            const savedProject = localStorage.getItem('gjsProject');
+            if (savedProject) {
+              const localProject = JSON.parse(savedProject);
+              if (localProject.serverId) {
+                const serverProject = serverProjects.find(p => p.id === localProject.serverId);
+                if (serverProject) {
+                  // Update local storage with server data
+                  const projectData = {
+                    ...localProject,
+                    ...serverProject,
+                    projectName: serverProject.project_name,
+                    serverId: serverProject.id
+                  };
+                  localStorage.setItem('gjsProject', JSON.stringify(projectData));
+                  if (projectData.pages) {
+                    setProjectData(projectData);
+                  }
+                  setProjectName(serverProject.project_name);
+                  setServerProjectId(serverProject.id);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('Could not load projects from server (might not be authenticated):', error);
+          // Continue with localStorage data
+        }
+      } catch (error) {
         console.error('Error loading project:', error);
       }
-    }
+    };
+    
+    loadProject();
   }, []);
 
   // Track if widgets have been loaded to avoid duplicates
   const widgetsLoadedRef = useRef(false);
 
   // Load custom widgets from server (defined before handleEditorReady to avoid initialization error)
-  const loadCustomWidgets = useCallback(async (editorInstance) => {
-    if (!editorInstance) return;
+  const loadCustomWidgets = useCallback(async (editorInstance, forceReload = false) => {
+    if (!editorInstance) {
+      console.warn('⚠️ Editor instance not available for loading widgets');
+      return;
+    }
     
-    // Prevent duplicate loading
-    if (widgetsLoadedRef.current) {
+    // Prevent duplicate loading unless forced
+    if (!forceReload && widgetsLoadedRef.current) {
       console.log('Widgets already loaded, skipping...');
       return;
     }
     
     try {
-      console.log('Loading custom widgets from server...');
+      console.log('📦 Loading custom widgets from server...');
       const response = await apiService.request('/custom-widgets/', {
         method: 'GET'
       });
       
-      console.log('Custom widgets response:', response);
+      console.log('📦 Custom widgets response:', response);
       
-      if (response && response.widgets && response.widgets.length > 0) {
+      if (response && response.widgets && Array.isArray(response.widgets) && response.widgets.length > 0) {
         const blocks = editorInstance.Blocks;
+        let loadedCount = 0;
+        let skippedCount = 0;
         
         response.widgets.forEach((widget) => {
           try {
@@ -90,6 +149,7 @@ function PageBuilder() {
             const existingBlock = blocks.get(widget.block_id);
             if (existingBlock) {
               // Block already exists, skip
+              skippedCount++;
               return;
             }
             
@@ -98,18 +158,18 @@ function PageBuilder() {
             
             if (widget.css_content) {
               const cssContent = widget.css_content.trim();
-              if (!cssContent.startsWith('<style')) {
+              if (cssContent && !cssContent.startsWith('<style')) {
                 componentContent = `<style>${cssContent}</style>${componentContent}`;
-              } else {
+              } else if (cssContent) {
                 componentContent = `${cssContent}${componentContent}`;
               }
             }
             
             if (widget.js_content) {
               const jsContent = widget.js_content.trim();
-              if (!jsContent.startsWith('<script')) {
+              if (jsContent && !jsContent.startsWith('<script')) {
                 componentContent = `${componentContent}<script>${jsContent}</script>`;
-              } else {
+              } else if (jsContent) {
                 componentContent = `${componentContent}${jsContent}`;
               }
             }
@@ -125,18 +185,21 @@ function PageBuilder() {
                 'data-widget-id': widget.block_id
               }
             });
+            
+            loadedCount++;
+            console.log(`✅ Added widget block: ${widget.name} (${widget.block_id})`);
           } catch (err) {
-            console.warn(`Failed to load widget ${widget.name}:`, err);
+            console.warn(`❌ Failed to load widget ${widget.name}:`, err);
           }
         });
         
         widgetsLoadedRef.current = true;
-        console.log(`✅ Loaded ${response.widgets.length} custom widget(s) from server`);
+        console.log(`✅ Loaded ${loadedCount} custom widget(s) from server (${skippedCount} skipped - already exist)`);
       } else {
-        console.log('No custom widgets found in response:', response);
+        console.log('ℹ️ No custom widgets found in response:', response);
       }
     } catch (error) {
-      console.warn('Failed to load custom widgets from server:', error);
+      console.warn('❌ Failed to load custom widgets from server:', error);
       // Continue without widgets - not critical
     }
   }, []);
@@ -191,9 +254,37 @@ function PageBuilder() {
       if (autoSaveEnabled) {
         try {
           const projectData = editorInstance.getProjectData();
-          localStorage.setItem('gjsProject', JSON.stringify(projectData));
-          setCurrentProject(prev => prev ? { ...prev, hasChanges: true } : { projectName: 'Untitled Project', hasChanges: true });
+          // Include current project name and save timestamp
+          const currentName = projectNameRef.current || 'Untitled Project';
+          const projectToSave = {
+            ...projectData,
+            projectName: currentName,
+            savedAt: new Date().toISOString(),
+            serverId: serverProjectId // Keep server ID
+          };
+          localStorage.setItem('gjsProject', JSON.stringify(projectToSave));
+          setCurrentProject(prev => prev ? { ...prev, hasChanges: true } : { projectName: currentName, hasChanges: true });
           setIsSaved(false);
+          
+          // Auto-save to server (debounced - only save every 5 seconds)
+          if (serverProjectId) {
+            clearTimeout(window.autoSaveTimeout);
+            window.autoSaveTimeout = setTimeout(async () => {
+              try {
+                const serverProjectData = {
+                  project_name: currentName,
+                  description: '',
+                  components: projectData.components || {},
+                  styles: projectData.styles || {},
+                  assets: projectData.assets || []
+                };
+                await apiService.updateUIProject(serverProjectId, serverProjectData);
+                console.log('💾 Auto-saved to server');
+              } catch (error) {
+                console.warn('⚠️ Auto-save to server failed:', error);
+              }
+            }, 5000); // Debounce: save 5 seconds after last change
+          }
         } catch (error) {
           console.error('Error saving project:', error);
         }
@@ -201,7 +292,7 @@ function PageBuilder() {
         setIsSaved(false);
       }
     });
-  }, [autoSaveEnabled, loadCustomWidgets]);
+  }, [autoSaveEnabled, loadCustomWidgets, serverProjectId]);
 
   const handleLoadProject = useCallback((project) => {
     if (currentProject?.hasChanges) {
@@ -210,9 +301,23 @@ function PageBuilder() {
       }
     }
     
+    // Set project data and server ID
     setProjectData(project);
-    setCurrentProject({ projectName: project.name || project.projectName || 'Untitled Project', hasChanges: false });
+    const projectName = project.projectName || project.project_name || project.name || 'Untitled Project';
+    setProjectName(projectName);
+    projectNameRef.current = projectName;
+    setServerProjectId(project.serverId || project.id || null);
+    setCurrentProject({ projectName, hasChanges: false });
     setShowProjectManager(false);
+    
+    // Save to localStorage
+    const projectToSave = {
+      ...project,
+      projectName,
+      serverId: project.serverId || project.id || null,
+      savedAt: project.savedAt || project.updated_at || new Date().toISOString()
+    };
+    localStorage.setItem('gjsProject', JSON.stringify(projectToSave));
     
     // Reload the page to apply new project
     window.location.reload();
@@ -334,7 +439,7 @@ function PageBuilder() {
 
       // Save widget to server
       try {
-        await apiService.request('/custom-widgets/save/', {
+        const saveResponse = await apiService.request('/custom-widgets/save/', {
           method: 'POST',
           body: JSON.stringify({
             name: blockLabel,
@@ -344,7 +449,13 @@ function PageBuilder() {
             block_id: blockId
           })
         });
-        console.log('Widget saved to server successfully');
+        console.log('✅ Widget saved to server successfully:', saveResponse);
+        
+        // Reload widgets to ensure the new one appears (force reload)
+        setTimeout(() => {
+          widgetsLoadedRef.current = false; // Reset flag to allow reload
+          loadCustomWidgets(editor, true); // Force reload
+        }, 500);
       } catch (saveError) {
         console.warn('Failed to save widget to server:', saveError);
         // Continue anyway - widget is still added locally
@@ -383,13 +494,54 @@ function PageBuilder() {
     }
   }, [editor, importHtml, importCss, importJs, widgetName]);
 
-  // Save project handler
-  const handleSaveProject = useCallback(() => {
+  // Save project handler - saves to both localStorage and server
+  const handleSaveProject = useCallback(async () => {
     if (!editor) return;
     
     try {
       const projectData = editor.getProjectData();
-      localStorage.setItem('gjsProject', JSON.stringify(projectData));
+      const currentName = projectName || 'Untitled Project';
+      
+      // Prepare project data for localStorage
+      const projectToSave = {
+        ...projectData,
+        projectName: currentName,
+        savedAt: new Date().toISOString(),
+        serverId: serverProjectId // Keep server ID if exists
+      };
+      
+      // Save to localStorage first (for offline access)
+      localStorage.setItem('gjsProject', JSON.stringify(projectToSave));
+      
+      // Try to save to server
+      try {
+        const serverProjectData = {
+          project_name: currentName,
+          description: '',
+          components: projectData.components || {},
+          styles: projectData.styles || {},
+          assets: projectData.assets || []
+        };
+        
+        if (serverProjectId) {
+          // Update existing project on server
+          const updatedProject = await apiService.updateUIProject(serverProjectId, serverProjectData);
+          console.log('✅ Project updated on server:', updatedProject);
+        } else {
+          // Create new project on server
+          const newProject = await apiService.createUIProject(serverProjectData);
+          setServerProjectId(newProject.id);
+          // Update localStorage with server ID
+          projectToSave.serverId = newProject.id;
+          localStorage.setItem('gjsProject', JSON.stringify(projectToSave));
+          console.log('✅ Project created on server:', newProject);
+        }
+      } catch (serverError) {
+        console.warn('⚠️ Could not save to server (might not be authenticated):', serverError);
+        // Continue anyway - project is saved locally
+      }
+      
+      setCurrentProject({ projectName: currentName, hasChanges: false });
       setIsSaved(true);
       
       // Show success notification
@@ -401,7 +553,7 @@ function PageBuilder() {
     } catch (error) {
       console.error('Error saving project:', error);
     }
-  }, [editor]);
+  }, [editor, projectName, serverProjectId]);
 
   // Get page and component stats
   const [stats, setStats] = useState({ pages: 0, components: 0 });
@@ -471,8 +623,20 @@ function PageBuilder() {
                   type="text"
                   className="workflow-name-input"
                   value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
+                  onChange={(e) => {
+                    const newName = e.target.value;
+                    setProjectName(newName);
+                    projectNameRef.current = newName;
+                    // Update current project name immediately
+                    setCurrentProject(prev => prev ? { ...prev, projectName: newName, hasChanges: true } : { projectName: newName, hasChanges: true });
+                    setIsSaved(false);
+                  }}
                   onBlur={handleSaveProject}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.target.blur(); // Trigger onBlur which calls handleSaveProject
+                    }
+                  }}
                 />
               </div>
             </div>
@@ -583,7 +747,16 @@ function PageBuilder() {
         </div>
 
         {/* Studio Editor */}
-        <div className={`page-builder-studio ${theme}`} style={{ width: '100%', height: 'calc(100vh - 60px)' }}>
+        <div 
+          className={`page-builder-studio ${theme}`} 
+          style={{ 
+            width: '100%', 
+            height: 'calc(100vh - 60px)',
+            position: 'relative',
+            zIndex: 1,
+            pointerEvents: showProjectManager ? 'none' : 'auto'
+          }}
+        >
           <StudioEditor
             options={{
               // Theme configuration
@@ -689,10 +862,40 @@ function PageBuilder() {
                           id: 'save-project',
                           label: 'Save',
                           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
-                          onClick: ({ editor }) => {
+                          onClick: async ({ editor }) => {
                             try {
                               const projectData = editor.getProjectData();
-                              localStorage.setItem('gjsProject', JSON.stringify(projectData));
+                              // Include current project name and save timestamp
+                              const currentName = projectNameRef.current || 'Untitled Project';
+                              const projectToSave = {
+                                ...projectData,
+                                projectName: currentName,
+                                savedAt: new Date().toISOString(),
+                                serverId: serverProjectId
+                              };
+                              localStorage.setItem('gjsProject', JSON.stringify(projectToSave));
+                              
+                              // Try to save to server
+                              try {
+                                const serverProjectData = {
+                                  project_name: currentName,
+                                  description: '',
+                                  components: projectData.components || {},
+                                  styles: projectData.styles || {},
+                                  assets: projectData.assets || []
+                                };
+                                
+                                if (serverProjectId) {
+                                  await apiService.updateUIProject(serverProjectId, serverProjectData);
+                                } else {
+                                  const newProject = await apiService.createUIProject(serverProjectData);
+                                  setServerProjectId(newProject.id);
+                                  projectToSave.serverId = newProject.id;
+                                  localStorage.setItem('gjsProject', JSON.stringify(projectToSave));
+                                }
+                              } catch (serverError) {
+                                console.warn('Could not save to server:', serverError);
+                              }
                               
                               // Show success notification
                               const notification = document.createElement('div');
@@ -700,7 +903,7 @@ function PageBuilder() {
                               notification.textContent = '✓ Project saved successfully!';
                               document.body.appendChild(notification);
                               setTimeout(() => notification.remove(), 3000);
-            } catch (error) {
+                            } catch (error) {
                               console.error('Error saving project:', error);
                             }
                           }
@@ -1326,15 +1529,18 @@ function PageBuilder() {
           }
         }}
       />
+        </div>
 
-          {/* Project Manager Modal */}
+        {/* Project Manager Modal - Rendered via Portal outside editor container */}
+        {createPortal(
           <ProjectManager
             isOpen={showProjectManager}
             onClose={() => setShowProjectManager(false)}
             onLoadProject={handleLoadProject}
             currentProject={currentProject}
-          />
-        </div>
+          />,
+          document.body
+        )}
 
         {/* Import Widget Modal - Outside Studio Editor to avoid interference */}
         {showImportModal && (

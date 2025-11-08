@@ -314,13 +314,18 @@
   background: #1f1f1f;
 }
 
-/* Ensure proper z-index for Studio SDK components */
+/* Ensure proper z-index for Studio SDK components - but lower than Project Manager */
 .gjs-mdl-dialog-container {
   z-index: 10000 !important;
 }
 
 .gjs-mdl-container {
   z-index: 10000 !important;
+}
+
+/* Ensure editor doesn't interfere with Project Manager modal */
+.page-builder-studio[style*="pointer-events: none"] * {
+  pointer-events: none !important;
 }
 
 /* Style Manager customizations */
@@ -651,12 +656,23 @@
   justify-content: center;
   z-index: 10000;
   backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .modal-container {
   background: white;
-  border-radius: 12px;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05);
   max-width: 700px;
   width: 90%;
   max-height: 90vh;
@@ -666,8 +682,9 @@
 }
 
 .dark .modal-container {
-  background: #272727;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+  background: #1a1a1a;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
+  border: 1px solid #2f2f2f;
 }
 
 .modal-header {
