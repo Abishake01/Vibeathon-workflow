@@ -1,10 +1,17 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { FiX, FiSearch, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 import { nodeTypeDefinitions, categories } from '../../nodeTypes.jsx';
+import { useDynamicNodes } from '../../hooks/useDynamicNodes';
 
 const NodeLibrary = ({ onAddNode, isOpen, onToggle, nodes = [], logsExpanded = false }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedCategories, setExpandedCategories] = useState(['AI', 'Core']);
+  const { dynamicNodes } = useDynamicNodes();
+
+  // Merge static and dynamic nodes
+  const allNodeDefinitions = useMemo(() => {
+    return { ...nodeTypeDefinitions, ...dynamicNodes };
+  }, [dynamicNodes]);
 
   const toggleCategory = (categoryKey) => {
     setExpandedCategories(prev => 
@@ -15,22 +22,22 @@ const NodeLibrary = ({ onAddNode, isOpen, onToggle, nodes = [], logsExpanded = f
   };
 
   const getNodesByCategory = (categoryKey) => {
-    return Object.entries(nodeTypeDefinitions).filter(([key, node]) => {
+    return Object.entries(allNodeDefinitions).filter(([key, node]) => {
       const matchesCategory = node.category === categoryKey;
       const matchesSearch = searchTerm === '' || 
         node.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        node.description.toLowerCase().includes(searchTerm.toLowerCase());
+        (node.description || '').toLowerCase().includes(searchTerm.toLowerCase());
       return matchesCategory && matchesSearch;
     });
   };
 
   // Check if a trigger node of the same type already exists
   const hasExistingTrigger = (nodeType) => {
-    const nodeDef = nodeTypeDefinitions[nodeType];
+    const nodeDef = allNodeDefinitions[nodeType];
     if (nodeDef?.nodeType !== 'trigger') return false;
     
     return nodes.some(node => {
-      const existingNodeDef = nodeTypeDefinitions[node.data.type];
+      const existingNodeDef = allNodeDefinitions[node.data.type];
       return existingNodeDef?.nodeType === 'trigger' && node.data.type === nodeType;
     });
   };

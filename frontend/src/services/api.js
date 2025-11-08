@@ -327,6 +327,27 @@ class ApiService {
     return this.request('/auth/check/');
   }
 
+  /**
+   * Fetch CSRF token from backend
+   */
+  async fetchCsrfToken() {
+    try {
+      const response = await fetch(`${this.baseURL}/auth/csrf-token/`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data.csrfToken || data.csrftoken || null;
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to fetch CSRF token:', error);
+      return null;
+    }
+  }
+
   // JWT token management
   async refreshToken() {
     return await this.refreshAccessToken();

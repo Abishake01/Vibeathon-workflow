@@ -6,4 +6,5 @@
 export * from './useLocalStorage';
 export * from './useNodeValidation';
 export * from './useNodeExecution';
+export { useDynamicNodes } from './useDynamicNodes';
 

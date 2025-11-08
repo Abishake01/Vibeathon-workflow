@@ -47,7 +47,9 @@ class BaseNodeExecutor(ABC):
     
     def get_property(self, key: str, default: Any = None) -> Any:
         """Get a property value with optional default"""
-        return self.properties.get(key, default)
+        # Always get from node_data to ensure we have the latest evaluated properties
+        # This is important because properties may be evaluated after executor creation
+        return self.node_data.get('properties', {}).get(key, default)
     
     def log_execution(self, message: str, level: str = 'info'):
         """Log execution message"""

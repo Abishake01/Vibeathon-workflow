@@ -121,12 +121,21 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         trigger_data = serializer.validated_data.get('trigger_data', {})
         credentials = serializer.validated_data.get('credentials', {})
         
+        # Refresh workflow from database to get latest properties
+        workflow.refresh_from_db()
+        
         # Check if node exists in workflow
         node = next((n for n in workflow.nodes if n['id'] == node_id), None)
         if not node:
             return Response({
                 'error': f'Node {node_id} not found in workflow'
             }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Log node properties for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Executing node {node_id} with properties: {node.get('data', {}).get('properties', {})}")
+        logger.info(f"user_message property: {node.get('data', {}).get('properties', {}).get('user_message', 'NOT FOUND')}")
         
         # Generate execution ID
         execution_id = str(uuid.uuid4())
@@ -1082,9 +1091,9 @@ def delete_custom_widget(request, widget_id):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@csrf_exempt
 @api_view(['GET'])
-@authentication_classes([JWTAuthentication, SessionAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])  # Allow access without authentication
 def get_dynamic_nodes(request):
     """Get all dynamically registered nodes"""
     try:

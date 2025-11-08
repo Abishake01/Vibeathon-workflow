@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   FiX,
   FiPlus,
@@ -9,12 +9,14 @@ import {
   FiArrowLeft,
 } from "react-icons/fi";
 import { nodeTypeDefinitions } from "../../nodeTypes.jsx";
+import { useDynamicNodes } from "../../hooks/useDynamicNodes";
 import { credentialsManager, credentialTypes } from "../../credentialsManager";
 import VariablesPanel from "./VariablesPanel.jsx";
 import ExpressionEditor from "./ExpressionEditor.jsx";
 import ResizablePanels from "./ResizablePanels.jsx";
 
 const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflowId, onRunPreviousNodes, edges = [], nodes = [] }) => {
+  const { dynamicNodes } = useDynamicNodes();
   const [properties, setProperties] = useState(node?.data?.properties || {});
   const [nodeName, setNodeName] = useState(node?.data?.label || "");
   const [validationStates, setValidationStates] = useState({});
@@ -32,7 +34,15 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
   const [outputTab, setOutputTab] = useState("output");
   const [outputView, setOutputView] = useState("json");
   const [activeExpressionKey, setActiveExpressionKey] = useState(null);
+  const [nodeOutput, setNodeOutput] = useState(null); // Store current node's output
+  const [isExecuting, setIsExecuting] = useState(false); // Track execution state
+  const [expandedOutputGroups, setExpandedOutputGroups] = useState({}); // For schema view expand/collapse
   const expressionEditorRefs = useRef({});
+
+  // Merge static and dynamic node definitions
+  const allNodeDefinitions = useMemo(() => {
+    return { ...nodeTypeDefinitions, ...dynamicNodes };
+  }, [dynamicNodes]);
 
   // JSON data for expression editor (same as VariablesPanel)
   const jsonData = {
@@ -52,6 +62,186 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
     },
   };
 
+  // Load node output from localStorage when node changes
+  useEffect(() => {
+    if (!node?.id) {
+      setNodeOutput(null);
+      return;
+    }
+
+    const loadNodeOutput = () => {
+      try {
+        const storedData = localStorage.getItem('workflow_execution_data');
+        if (storedData) {
+          const executionData = JSON.parse(storedData);
+          const nodeState = executionData.node_states?.[node.id];
+          
+          if (nodeState && nodeState.output) {
+            let output = nodeState.output;
+            // Extract main data if it's structured
+            if (typeof output === 'object' && 'main' in output) {
+              output = output.main;
+            }
+            setNodeOutput(output);
+          } else {
+            setNodeOutput(null);
+          }
+        } else {
+          setNodeOutput(null);
+        }
+      } catch (error) {
+        console.error('Error loading node output:', error);
+        setNodeOutput(null);
+      }
+    };
+
+    loadNodeOutput();
+
+    // Listen for execution updates
+    const handleExecutionUpdate = () => {
+      loadNodeOutput();
+    };
+
+    window.addEventListener('workflowExecutionUpdate', handleExecutionUpdate);
+    window.addEventListener('storage', handleExecutionUpdate);
+
+    return () => {
+      window.removeEventListener('workflowExecutionUpdate', handleExecutionUpdate);
+      window.removeEventListener('storage', handleExecutionUpdate);
+    };
+  }, [node?.id]);
+
+  // Recursive function to render JSON data in schema view
+  const renderOutputSchema = (data, prefix = '', parentKey = '') => {
+    if (data === null || data === undefined) {
+      return (
+        <div className="output-variable-item">
+          <span className="output-var-icon">null</span>
+          <span className="output-var-name">{prefix || 'null'}</span>
+          <span className="output-var-value">null</span>
+        </div>
+      );
+    }
+
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      return Object.entries(data).map(([key, value]) => {
+        const fullPath = prefix ? `${prefix}.${key}` : key;
+        const groupKey = parentKey ? `${parentKey}_${key}` : key;
+        const isExpanded = expandedOutputGroups[groupKey] !== false;
+        
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          return (
+            <div key={key} className="output-nested-group">
+              <div 
+                className="output-group-header clickable"
+                onClick={() => setExpandedOutputGroups(prev => ({
+                  ...prev,
+                  [groupKey]: !isExpanded
+                }))}
+              >
+                <span className="output-arrow-icon">{isExpanded ? "▼" : "▶"}</span>
+                <span className="output-cube-icon">⧉</span>
+                <span className="output-var-name">{key}</span>
+              </div>
+              {isExpanded && (
+                <div className="output-group-content">
+                  {renderOutputSchema(value, fullPath, groupKey)}
+                </div>
+              )}
+            </div>
+          );
+        } else {
+          return (
+            <div key={key} className="output-variable-item">
+              <span className="output-var-icon">
+                {typeof value === "boolean" ? "□" : typeof value === "number" ? "#" : "T"}
+              </span>
+              <span className="output-var-name">{key}</span>
+              <span className={`output-var-value ${typeof value === "boolean" ? "boolean" : ""}`}>
+                {String(value).substring(0, 100)}{String(value).length > 100 ? '...' : ''}
+              </span>
+            </div>
+          );
+        }
+      });
+    } else if (Array.isArray(data)) {
+      return data.map((item, index) => {
+        const fullPath = `${prefix}[${index}]`;
+        const groupKey = `${parentKey}_arr_${index}`;
+        const isExpanded = expandedOutputGroups[groupKey] !== false;
+        
+        return (
+          <div key={index} className="output-nested-group">
+            <div 
+              className="output-group-header clickable"
+              onClick={() => setExpandedOutputGroups(prev => ({
+                ...prev,
+                [groupKey]: !isExpanded
+              }))}
+            >
+              <span className="output-arrow-icon">{isExpanded ? "▼" : "▶"}</span>
+              <span className="output-cube-icon">[</span>
+              <span className="output-var-name">[{index}]</span>
+            </div>
+            {isExpanded && (
+              <div className="output-group-content">
+                {renderOutputSchema(item, fullPath, groupKey)}
+              </div>
+            )}
+          </div>
+        );
+      });
+    } else {
+      return (
+        <div className="output-variable-item">
+          <span className="output-var-icon">T</span>
+          <span className="output-var-name">{prefix || 'value'}</span>
+          <span className="output-var-value">{String(data)}</span>
+        </div>
+      );
+    }
+  };
+
+  // Render table rows from output data
+  const renderOutputTable = (data, prefix = '') => {
+    if (data === null || data === undefined) {
+      return (
+        <tr key={prefix || 'null'}>
+          <td>{prefix || 'null'}</td>
+          <td>null</td>
+        </tr>
+      );
+    }
+
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      return Object.entries(data).flatMap(([key, value]) => {
+        const fullPath = prefix ? `${prefix}.${key}` : key;
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          return renderOutputTable(value, fullPath);
+        } else {
+          return (
+            <tr key={fullPath}>
+              <td>{fullPath}</td>
+              <td>{String(value)}</td>
+            </tr>
+          );
+        }
+      });
+    } else if (Array.isArray(data)) {
+      return data.flatMap((item, index) => {
+        const fullPath = `${prefix}[${index}]`;
+        return renderOutputTable(item, fullPath);
+      });
+    } else {
+      return (
+        <tr key={prefix || 'value'}>
+          <td>{prefix || 'value'}</td>
+          <td>{String(data)}</td>
+        </tr>
+      );
+    }
+  };
+
   useEffect(() => {
     if (node && isOpen) {
       setProperties(node.data?.properties || {});
@@ -61,7 +251,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
         localStorage.getItem(`inputValues_${nodeId}`) || "{}"
       );
       const initialInputValues = {};
-      const nodeTypeDef = nodeTypeDefinitions[node.data.type];
+      const nodeTypeDef = allNodeDefinitions[node.data.type] || nodeTypeDefinitions[node.data.type];
       if (nodeTypeDef?.properties) {
         Object.keys(nodeTypeDef.properties).forEach((key) => {
           initialInputValues[key] =
@@ -91,7 +281,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
 
   if (!isOpen || !node || !node.data) return null;
 
-  const nodeTypeDef = nodeTypeDefinitions[node.data.type];
+  const nodeTypeDef = allNodeDefinitions[node.data.type] || nodeTypeDefinitions[node.data.type];
 
   const handlePropertyChange = (propKey, value) => {
     if (!node?.id) return;
@@ -148,8 +338,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           if (onUpdate && node.id) {
             onUpdate(node.id, { properties: newProperties });
           }
-        }
-      } catch (error) {
+      }
+    } catch (error) {
         console.error("Error restoring from localStorage:", error);
       }
     }
@@ -263,7 +453,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
         const isApiKey = propKey.includes("api_key") || propKey.includes("key");
         const validationState = validationStates[propKey];
         const isTesting = testingKeys[propKey];
-        return (
+  return (
           <div className="api-key-input-container">
             <div className="api-key-input-wrapper">
               <input
@@ -301,9 +491,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                   }}
                 >
                   {showApiKey[propKey] ? "👁️" : "👁️‍🗨️"}
-                </button>
+          </button>
               )}
-            </div>
+          </div>
             {isApiKey && (
               <div className="api-key-status">
                 {isTesting && (
@@ -317,7 +507,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                         <pre className="api-key-json">
                           {JSON.stringify({ status: apiTestResponses[propKey].status || 'active' }, null, 2)}
                         </pre>
-                      </div>
+        </div>
                     )}
                   </>
                 )}
@@ -362,12 +552,12 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                   </a>{" "}
                   of how this node works
                 </span>
-              </div>
+            </div>
 
               {/* Fixed/Expression Toggle */}
               <div className="flex mb-3">
                 <div className="inline-flex rounded overflow-hidden border border-[#3d3d52]">
-                  <button
+                    <button 
                     onClick={() => setPromptModes(prev => ({ ...prev, [propKey]: "fixed" }))}
                     className={`px-3 py-1.5 text-sm transition-colors ${
                       (promptModes[propKey] || "fixed") === "fixed"
@@ -386,9 +576,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                     }`}
                   >
                     Expression
-                  </button>
+                    </button>
+                  </div>
                 </div>
-              </div>
 
               {(promptModes[propKey] || "fixed") === "fixed" ? (
                 <textarea
@@ -589,7 +779,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                   }}
                   className="property-input"
                 />
-                <button
+                      <button 
                   className="btn-icon"
                   onClick={() => {
                     const newPairs = kvPairs.filter((_, i) => i !== idx);
@@ -597,9 +787,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                   }}
                 >
                   <FiTrash2 />
-                </button>
-              </div>
-            ))}
+                      </button>
+                          </div>
+                        ))}
             <button
               className="btn-add"
               onClick={() =>
@@ -611,7 +801,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
             >
               <FiPlus /> Add Pair
             </button>
-          </div>
+                      </div>
         );
 
       case "json":
@@ -638,9 +828,32 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
     }
   };
 
-  const handleExecuteClick = () => {
+  const handleExecuteClick = async () => {
     if (onExecute && node?.id) {
-      onExecute(node.id);
+      setIsExecuting(true);
+      try {
+        await onExecute(node.id);
+        // Wait a bit for the execution to complete and data to be stored
+        setTimeout(() => {
+          // Reload output after execution
+          const storedData = localStorage.getItem('workflow_execution_data');
+          if (storedData) {
+            const executionData = JSON.parse(storedData);
+            const nodeState = executionData.node_states?.[node.id];
+            if (nodeState && nodeState.output) {
+              let output = nodeState.output;
+              if (typeof output === 'object' && 'main' in output) {
+                output = output.main;
+              }
+              setNodeOutput(output);
+            }
+          }
+          setIsExecuting(false);
+        }, 500);
+      } catch (error) {
+        console.error('Execution error:', error);
+        setIsExecuting(false);
+      }
     }
   };
 
@@ -659,7 +872,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
 
           {/* Manual Execution Section */}
           <div className="collapsible-section">
-            <button
+                      <button 
               className="collapsible-header"
               onClick={() =>
                 setInputExpanded((prev) => ({
@@ -674,14 +887,14 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                 <FiChevronRight />
               )}
               <span>Manual execution</span>
-            </button>
+                      </button>
             {inputExpanded.manualExecution && (
               <div className="collapsible-content">
                 <div className="empty-state">
                   ⚡ No fields - node executed, but no items were sent on this
                   branch
                 </div>
-              </div>
+                    </div>
             )}
           </div>
 
@@ -702,8 +915,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
             }}
             onRunPreviousNodes={onRunPreviousNodes}
           />
-        </div>
-        </div>
+            </div>
+          </div>
 
         {/* Middle Panel - Node Configuration */}
         <div className="settings-panel-center">
@@ -724,33 +937,33 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                 Docs
               </a>
             </div>
-          </div>
+            </div>
 
           {/* Tabs */}
           <div className="config-tabs">
-            <button
+              <button 
               className={`config-tab ${
                 activeTab === "parameters" ? "active" : ""
               }`}
               onClick={() => setActiveTab("parameters")}
-            >
-              Parameters
-            </button>
-            <button
+              >
+                Parameters
+              </button>
+              <button 
               className={`config-tab ${
                 activeTab === "settings" ? "active" : ""
               }`}
               onClick={() => setActiveTab("settings")}
-            >
-              Settings
-            </button>
-            <button
+              >
+                Settings
+              </button>
+              <button 
               className={`config-tab ${activeTab === "docs" ? "active" : ""}`}
               onClick={() => setActiveTab("docs")}
-            >
-              Docs
-            </button>
-          </div>
+              >
+                Docs
+              </button>
+            </div>
 
           {/* Tab Content */}
           <div className="config-content">
@@ -781,20 +994,49 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                     }
                   )}
 
-                {/* Prompt (User Message) */}
+                {/* System Message (prompt) */}
+                {nodeTypeDef?.properties &&
+                  Object.entries(nodeTypeDef.properties).map(
+                    ([key, propDef]) => {
+                      if (key === "prompt" && node.data.type === "ai-agent") {
+                        return (
+                          <div key={key} className="property-field">
+                            <label className="property-label">
+                              {propDef.label || "System Message"}
+                              {propDef.required && (
+                                <span className="required">*</span>
+                              )}
+                            </label>
+                            {renderPropertyInput(key, propDef)}
+                            {propDef.description && (
+                              <small className="field-description">
+                                {propDef.description}
+                              </small>
+                            )}
+                          </div>
+                        );
+                      }
+                      return null;
+                    }
+                  )}
+
+                {/* User Message (Query) */}
                 {nodeTypeDef?.properties &&
                   Object.entries(nodeTypeDef.properties).map(
                     ([key, propDef]) => {
                       if (
-                        key === "prompt" ||
-                        key === "message" ||
-                        key === "user_message"
+                        key === "user_message" ||
+                        (key === "message" && node.data.type !== "ai-agent") ||
+                        (key === "prompt" && node.data.type !== "ai-agent")
                       ) {
                         return (
                           <div key={key} className="property-field">
                             <div className="prompt-header">
                               <label className="property-label">
-                                Prompt (User Message) *
+                                {propDef.label || "User Message (Query)"}
+                                {propDef.required && (
+                                  <span className="required">*</span>
+                                )}
                               </label>
                               <div className="toggle-mode-buttons">
                                 <button
@@ -832,8 +1074,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                                   onFocus={() => setActiveExpressionKey(key)}
                                   jsonData={jsonData}
                                   placeholder="Enter expression, e.g., {{ $json.content }}"
-                                />
-                              </div>
+                  />
+                </div>
                             ) : (
                               <div className="prompt-editor">
                                 <div className="editor-icons">
@@ -875,7 +1117,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                                   className="result-textarea"
                                   rows={3}
                                 />
-                              </div>
+                </div>
                             </div>
                           </div>
                         );
@@ -890,9 +1132,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                     ([key, propDef]) => {
                       if (
                         key !== "prompt_source" &&
-                        key !== "prompt" &&
-                        key !== "message" &&
-                        key !== "user_message"
+                        !(key === "prompt" && node.data.type === "ai-agent") &&
+                        key !== "user_message" &&
+                        !(key === "message" && node.data.type !== "ai-agent") &&
+                        !(key === "prompt" && node.data.type !== "ai-agent")
                       ) {
                         return (
                           <div key={key} className="property-field">
@@ -908,18 +1151,18 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                                 {propDef.description}
                               </small>
                             )}
-                          </div>
+                </div>
                         );
                       }
                       return null;
                     }
-                  )}
+              )}
 
                 {/* Options Section */}
                 <div className="options-section">
                   <div className="section-label">Options</div>
                   <div className="empty-options">No properties</div>
-                </div>
+            </div>
 
                 {/* Chat Model */}
                 {nodeTypeDef?.properties &&
@@ -941,7 +1184,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                             key.includes("model") || key.includes("chat_model")
                         )?.[1]
                       )}
-                    </div>
+          </div>
                   )}
 
                 {/* Memory and Tool Tabs */}
@@ -1105,14 +1348,16 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
               onClick={() => setOutputTab("logs")}
             >
               Logs
-            </button>
-          </div>
+              </button>
+            </div>
         </div>
         <div className="panel-content">
           {outputTab === "output" && (
             <div className="output-content">
               <div className="output-header">
-                <span className="output-count">1 item</span>
+                <span className="output-count">
+                  {nodeOutput ? "1 item" : "No output"}
+                </span>
                 <div className="output-view-tabs">
                   <button
                     className={`output-view-tab ${
@@ -1140,28 +1385,95 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
                   </button>
                 </div>
               </div>
-              <div className="json-viewer">
-                <pre>
-                  {JSON.stringify(
-                    {
-                      output:
-                        "World news:\n• Breaking: Major development in international relations\n• Global economy shows signs of recovery\n\nTech news:\n• New AI breakthrough announced\n• Tech companies report strong quarterly results\n• Cybersecurity threats on the rise\n• Cloud computing adoption accelerates\n• Mobile technology innovations continue",
-                    },
-                    null,
-                    2
+              {/* Schema View */}
+              {outputView === "schema" && (
+                <div className="output-schema-view">
+                  {isExecuting ? (
+                    <div className="output-loading">
+                      <span className="spinner"></span>
+                      <p>Executing node...</p>
+                    </div>
+                  ) : nodeOutput ? (
+                    <div className="output-schema-content">
+                      {renderOutputSchema(nodeOutput)}
+                    </div>
+                  ) : (
+                    <div className="empty-output">
+                      <p>No output available. Execute this node to see results.</p>
+                      <p className="empty-output-hint">
+                        Click "Execute step" button to run this node and see its output here.
+                      </p>
+                    </div>
                   )}
-                </pre>
-              </div>
-            </div>
-          )}
+                </div>
+              )}
+
+              {/* Table View */}
+              {outputView === "table" && (
+                <div className="output-table-view">
+                  {isExecuting ? (
+                    <div className="output-loading">
+                      <span className="spinner"></span>
+                      <p>Executing node...</p>
+                    </div>
+                  ) : nodeOutput ? (
+                    <div className="table-view-content">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Key</th>
+                            <th>Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {renderOutputTable(nodeOutput)}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="empty-output">
+                      <p>No output available. Execute this node to see results.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* JSON View */}
+              {outputView === "json" && (
+                <div className="json-viewer">
+                  {isExecuting ? (
+                    <div className="output-loading">
+                      <span className="spinner"></span>
+                      <p>Executing node...</p>
+                    </div>
+                  ) : nodeOutput ? (
+                    <pre className="output-json-content">
+                      {JSON.stringify(
+                        typeof nodeOutput === 'object' ? nodeOutput : { output: nodeOutput },
+                        null,
+                        2
+                      )}
+                    </pre>
+                  ) : (
+                    <div className="empty-output">
+                      <p>No output available. Execute this node to see results.</p>
+                      <p className="empty-output-hint">
+                        Click "Execute step" button to run this node and see its output here.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+                    </div>
+                  )}
 
           {outputTab === "logs" && (
             <div className="logs-content">
               <div className="empty-logs">No logs available</div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        </div>
+          </div>
       </ResizablePanels>
 
       <style>{`
@@ -1348,11 +1660,44 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           display: flex;
           align-items: center;
           gap: 6px;
-          transition: background 0.2s;
+          transition: all 0.3s ease;
+          position: relative;
+          overflow: hidden;
         }
-
-        .execute-button:hover {
+        .execute-button:hover:not(:disabled) {
           background: #ff5a45;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 8px rgba(255, 109, 90, 0.3);
+        }
+        .execute-button:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
+        }
+        .execute-button.executing {
+          background: #3b82f6;
+          animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.8;
+          }
+        }
+        .spinner {
+          display: inline-block;
+          width: 14px;
+          height: 14px;
+          border: 2px solid rgba(255, 255, 255, 0.3);
+          border-top-color: white;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
         }
 
         .docs-link {
@@ -1963,6 +2308,160 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflo
           max-width: 100%;
           box-sizing: border-box;
           min-width: 0;
+        }
+        .output-json-content {
+          animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(-5px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .empty-output {
+          padding: 40px 20px;
+          text-align: center;
+          color: var(--textSecondary);
+        }
+        .empty-output p {
+          margin: 8px 0;
+          font-size: 13px;
+        }
+        .empty-output-hint {
+          font-size: 12px;
+          color: var(--textSecondary);
+          opacity: 0.7;
+        }
+        .output-loading {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 40px 20px;
+          gap: 12px;
+        }
+        .output-loading .spinner {
+          width: 32px;
+          height: 32px;
+          border-width: 3px;
+        }
+        .output-loading p {
+          color: var(--textSecondary);
+          font-size: 14px;
+        }
+        /* Schema View Styles */
+        .output-schema-view {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 12px;
+          overflow-y: auto;
+          max-height: calc(100vh - 200px);
+          animation: fadeIn 0.3s ease-in;
+        }
+        .output-schema-content {
+          font-family: 'Courier New', monospace;
+          font-size: 12px;
+        }
+        .output-variable-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 4px 8px;
+          border-radius: 4px;
+          margin-bottom: 4px;
+          transition: background 0.2s;
+        }
+        .output-variable-item:hover {
+          background: rgba(255, 255, 255, 0.05);
+        }
+        .output-var-icon {
+          color: #aaa;
+          font-size: 11px;
+          width: 16px;
+          text-align: center;
+        }
+        .output-var-name {
+          min-width: 120px;
+          color: var(--text);
+          font-weight: 500;
+        }
+        .output-var-value {
+          color: #ccc;
+          flex: 1;
+          word-break: break-word;
+        }
+        .output-var-value.boolean {
+          color: #ff6d5a;
+        }
+        .output-nested-group {
+          margin-left: 16px;
+          margin-top: 4px;
+        }
+        .output-group-header {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 4px 8px;
+          cursor: pointer;
+          border-radius: 4px;
+          transition: background 0.2s;
+        }
+        .output-group-header.clickable:hover {
+          background: rgba(255, 255, 255, 0.1);
+        }
+        .output-arrow-icon,
+        .output-cube-icon {
+          color: #888;
+          font-size: 10px;
+          width: 16px;
+          text-align: center;
+        }
+        .output-group-content {
+          margin-left: 24px;
+          border-left: 1px dotted var(--border);
+          padding-left: 8px;
+          margin-top: 4px;
+        }
+        /* Table View Styles */
+        .output-table-view {
+          background: var(--surface);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 12px;
+          overflow-y: auto;
+          max-height: calc(100vh - 200px);
+          animation: fadeIn 0.3s ease-in;
+        }
+        .table-view-content {
+          width: 100%;
+        }
+        .table-view-content table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 12px;
+        }
+        .table-view-content th,
+        .table-view-content td {
+          border: 1px solid var(--border);
+          padding: 8px 12px;
+          text-align: left;
+          word-break: break-word;
+        }
+        .table-view-content th {
+          background: var(--background);
+          font-weight: 600;
+          color: var(--text);
+        }
+        .table-view-content td {
+          color: var(--textSecondary);
+        }
+        .table-view-content tr:hover {
+          background: rgba(255, 255, 255, 0.03);
         }
 
         .logs-content {

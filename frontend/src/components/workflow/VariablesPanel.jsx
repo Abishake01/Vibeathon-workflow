@@ -75,10 +75,33 @@ const VariablesPanel = ({ onVariableSelect, workflowId, nodeId, onRunPreviousNod
         
         setPreviousNodes(previousNodeIds);
         
-        // Collect data from ALL previous nodes
+        // Collect data from ALL previous nodes AND current node if executed
         let mainData = null;
         let nodeResults = {};
         let nodeDataByNodeId = {}; // Store each node's data by its ID
+        
+        // Check if current node has been executed
+        const currentNodeState = nodeStates[nodeId];
+        if (currentNodeState && currentNodeState.output) {
+          const output = currentNodeState.output;
+          nodeResults[nodeId] = output;
+          
+          // Extract main data from current node
+          let nodeMainData = null;
+          if (typeof output === 'object' && 'main' in output) {
+            nodeMainData = output.main;
+          } else {
+            nodeMainData = output;
+          }
+          
+          // Store by node ID for direct access
+          nodeDataByNodeId[nodeId] = nodeMainData;
+          
+          // Use current node's data as primary if no previous nodes
+          if (previousNodeIds.length === 0 && nodeMainData) {
+            mainData = nodeMainData;
+          }
+        }
         
         // Collect all previous node results
         previousNodeIds.forEach(prevNodeId => {
@@ -119,7 +142,11 @@ const VariablesPanel = ({ onVariableSelect, workflowId, nodeId, onRunPreviousNod
           }
         }
         
-        if (mainData || Object.keys(nodeResults).length > 0) {
+        // Check if we have data from previous nodes OR current node
+        const hasCurrentNodeData = currentNodeState && currentNodeState.output;
+        const hasPreviousNodeData = mainData || Object.keys(nodeResults).length > 0;
+        
+        if (hasCurrentNodeData || hasPreviousNodeData) {
           setHasData(true);
           // Merge mainData with defaultJsonData, but don't duplicate $now and $today at root
           const mergedJsonData = {
@@ -132,7 +159,7 @@ const VariablesPanel = ({ onVariableSelect, workflowId, nodeId, onRunPreviousNod
               ...defaultJsonData,
               ...(mainData || {}),
             },
-            // Add all node results by their node IDs
+            // Add all node results by their node IDs (includes current node if executed)
             ...nodeResults,
             // Also add individual node data by their IDs
             ...nodeDataByNodeId,
@@ -140,13 +167,15 @@ const VariablesPanel = ({ onVariableSelect, workflowId, nodeId, onRunPreviousNod
           setJsonData(mergedJsonData);
           console.log('✅ Found execution data for node:', nodeId, {
             previousNodes: previousNodeIds,
+            hasCurrentNodeData,
+            hasPreviousNodeData,
             mainData,
             nodeResults: Object.keys(nodeResults)
           });
         } else {
           setHasData(false);
           setJsonData(null);
-          console.log('⚠️ No execution data found for previous nodes of:', nodeId);
+          console.log('⚠️ No execution data found for node:', nodeId);
         }
       } else {
         // No data in localStorage
@@ -423,52 +452,115 @@ const VariablesPanel = ({ onVariableSelect, workflowId, nodeId, onRunPreviousNod
           {/* Schema View */}
           {outputView === "schema" && (
             <div className="variables-box scrollable">
-              {/* Show previous nodes with their names and outputs */}
-              {hasData && previousNodes.length > 0 && previousNodes.map(prevNodeId => {
-                const node = nodes.find(n => n.id === prevNodeId);
-                const nodeName = node?.data?.label || node?.data?.type || prevNodeId;
-                const nodeOutput = displayData[prevNodeId];
-                const isExpanded = expandedNodeGroups[prevNodeId] !== false; // Default to expanded
+              {/* Show current node output if it has been executed */}
+              {hasData && (() => {
+                const storedData = localStorage.getItem('workflow_execution_data');
+                if (!storedData) return null;
                 
-                if (!nodeOutput) return null;
+                const executionData = JSON.parse(storedData);
+                const currentNodeState = executionData.node_states?.[nodeId];
                 
-                // Extract main data from node output
-                let nodeMainData = null;
-                if (typeof nodeOutput === 'object' && 'main' in nodeOutput) {
-                  nodeMainData = nodeOutput.main;
-                } else {
-                  nodeMainData = nodeOutput;
-                }
-                
-                return (
-                  <div key={prevNodeId} className="variable-group node-output-group">
-                    <div 
-                      className="group-header clickable"
-                      onClick={() => setExpandedNodeGroups(prev => ({
-                        ...prev,
-                        [prevNodeId]: !isExpanded
-                      }))}
-                    >
-                      <span className="arrow-icon">{isExpanded ? "▼" : "▶"}</span>
-                      <span className="cube-icon">📦</span>
-                      <span className="var-name node-name">{nodeName}</span>
-                      <span className="node-id">({prevNodeId.substring(0, 8)}...)</span>
-                    </div>
-                    {isExpanded && (
-                      <div className="group-content">
-                        {nodeMainData ? (
-                          renderJsonData(nodeMainData, `$json.${prevNodeId}`, prevNodeId)
-                        ) : (
-                          <div className="variable-item">
-                            <span className="var-icon">T</span>
-                            <span className="var-name">No output data</span>
-                          </div>
-                        )}
+                if (currentNodeState && currentNodeState.output) {
+                  const node = nodes.find(n => n.id === nodeId);
+                  const nodeName = node?.data?.label || node?.data?.type || nodeId;
+                  const nodeOutput = currentNodeState.output;
+                  const isExpanded = expandedNodeGroups[nodeId] !== false;
+                  
+                  // Extract main data from current node output
+                  let nodeMainData = null;
+                  if (typeof nodeOutput === 'object' && 'main' in nodeOutput) {
+                    nodeMainData = nodeOutput.main;
+                  } else {
+                    nodeMainData = nodeOutput;
+                  }
+                  
+                  return (
+                    <div key={nodeId} className="variable-group node-output-group current-node-output">
+                      <div 
+                        className="group-header clickable"
+                        onClick={() => setExpandedNodeGroups(prev => ({
+                          ...prev,
+                          [nodeId]: !isExpanded
+                        }))}
+                      >
+                        <span className="arrow-icon">{isExpanded ? "▼" : "▶"}</span>
+                        <span className="cube-icon">📦</span>
+                        <span className="var-name node-name current-node-label">{nodeName} (Current)</span>
+                        <span className="node-id">({nodeId.substring(0, 8)}...)</span>
                       </div>
-                    )}
-                  </div>
-                );
-              })}
+                      {isExpanded && (
+                        <div className="group-content">
+                          {nodeMainData ? (
+                            renderJsonData(nodeMainData, `$json.${nodeId}`, nodeId)
+                          ) : (
+                            <div className="variable-item">
+                              <span className="var-icon">T</span>
+                              <span className="var-name">No output data</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              
+              {/* Show previous nodes with their names and outputs */}
+              {hasData && previousNodes.length > 0 && (() => {
+                const storedData = localStorage.getItem('workflow_execution_data');
+                if (!storedData) return null;
+                
+                const executionData = JSON.parse(storedData);
+                const nodeStates = executionData.node_states || {};
+                
+                return previousNodes.map(prevNodeId => {
+                  const node = nodes.find(n => n.id === prevNodeId);
+                  const nodeName = node?.data?.label || node?.data?.type || prevNodeId;
+                  const nodeState = nodeStates[prevNodeId];
+                  const nodeOutput = nodeState?.output;
+                  const isExpanded = expandedNodeGroups[prevNodeId] !== false; // Default to expanded
+                  
+                  if (!nodeOutput) return null;
+                
+                  // Extract main data from node output
+                  let nodeMainData = null;
+                  if (typeof nodeOutput === 'object' && 'main' in nodeOutput) {
+                    nodeMainData = nodeOutput.main;
+                  } else {
+                    nodeMainData = nodeOutput;
+                  }
+                  
+                  return (
+                    <div key={prevNodeId} className="variable-group node-output-group">
+                      <div 
+                        className="group-header clickable"
+                        onClick={() => setExpandedNodeGroups(prev => ({
+                          ...prev,
+                          [prevNodeId]: !isExpanded
+                        }))}
+                      >
+                        <span className="arrow-icon">{isExpanded ? "▼" : "▶"}</span>
+                        <span className="cube-icon">📦</span>
+                        <span className="var-name node-name">{nodeName}</span>
+                        <span className="node-id">({prevNodeId.substring(0, 8)}...)</span>
+                      </div>
+                      {isExpanded && (
+                        <div className="group-content">
+                          {nodeMainData ? (
+                            renderJsonData(nodeMainData, `$json.${prevNodeId}`, prevNodeId)
+                          ) : (
+                            <div className="variable-item">
+                              <span className="var-icon">T</span>
+                              <span className="var-name">No output data</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
               
               {/* Show $json if we have execution data (merged data) */}
               {hasData && displayData.$json && Object.keys(displayData.$json).length > 0 && (
@@ -762,6 +854,13 @@ const VariablesPanel = ({ onVariableSelect, workflowId, nodeId, onRunPreviousNod
         .node-name {
           font-weight: 600;
           color: #ff6d5a;
+        }
+        .current-node-label {
+          color: #10b981 !important;
+        }
+        .current-node-output {
+          border-left: 3px solid #10b981;
+          background: rgba(16, 185, 129, 0.05);
         }
         .node-id {
           font-size: 10px;

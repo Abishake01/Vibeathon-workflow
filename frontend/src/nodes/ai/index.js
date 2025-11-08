@@ -18,7 +18,15 @@ export const aiNodes = {
     icon: 'AiOutlineRobot',
     description: 'Generates an action plan and executes it. Can use external tools.',
     properties: {
-      prompt: systemPromptProperty
+      prompt: systemPromptProperty,
+      user_message: {
+        type: 'textarea',
+        label: 'User Message (Query)',
+        default: '',
+        required: false,
+        placeholder: 'Enter your query or message here...',
+        description: 'The user message/query to send to the AI agent. If empty, will use input from connected nodes or default message.'
+      }
     }
   }),
 

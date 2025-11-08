@@ -7,7 +7,8 @@ import React from 'react';
 import { 
   FiGlobe, FiGitBranch, FiEdit3, FiCode, FiGitMerge, 
   FiSend, FiFilter, FiDatabase, FiFileText, FiTrendingUp,
-  FiUsers, FiMessageSquare, FiHash, FiFile, FiCalendar, FiSearch
+  FiUsers, FiMessageSquare, FiHash, FiFile, FiCalendar, FiSearch,
+  FiBox
 } from 'react-icons/fi';
 import { 
   BiNetworkChart, BiBrain, BiData
@@ -35,6 +36,7 @@ export const icons = {
   FiFile: <FiFile />,
   FiCalendar: <FiCalendar />,
   FiSearch: <FiSearch />,
+  FiBox: <FiBox />,
   
   // React Icons - BoxIcons
   BiNetworkChart: <BiNetworkChart />,

@@ -35,6 +35,7 @@ import ImportModal from '../ui/ImportModal';
 import ClearWorkspaceModal from '../ui/ClearWorkspaceModal';
 import ExecutionsView from '../execution/ExecutionsView';
 import { nodeTypeDefinitions } from '../../nodeTypes.jsx';
+import { useDynamicNodes } from '../../hooks/useDynamicNodes';
 import { executionEngine } from '../../executionEngine';
 import { workflowApi } from '../../api/workflowApi';
 import { useTheme } from '../../theme.jsx';
@@ -54,9 +55,15 @@ function WorkflowBuilder() {
   const [nodes, setNodes] = useState(initialNodes);
   const [edges, setEdges] = useState(initialEdges);
 
+  // Fetch dynamic nodes
+  const { dynamicNodes } = useDynamicNodes();
+
   // Create a universal node type mapper - all node types use WorkflowNode component
   const nodeTypes = useMemo(() => {
-    const types = Object.keys(nodeTypeDefinitions).reduce((acc, nodeType) => {
+    // Merge static and dynamic nodes
+    const allNodeDefs = { ...nodeTypeDefinitions, ...dynamicNodes };
+    
+    const types = Object.keys(allNodeDefs).reduce((acc, nodeType) => {
       acc[nodeType] = WorkflowNode;
       return acc;
     }, {});
@@ -67,9 +74,10 @@ function WorkflowBuilder() {
 
     console.log('📝 Node types registered:', Object.keys(types));
     console.log('📝 Notes node type:', types['notes']);
+    console.log('📝 Dynamic nodes:', Object.keys(dynamicNodes));
     
     return types;
-  }, []); // Empty dependency array since nodeTypeDefinitions and components don't change
+  }, [dynamicNodes]); // Include dynamicNodes in dependency
   const [nodeSettingsModalOpen, setNodeSettingsModalOpen] = useState(false);
   const [selectedNodeForModal, setSelectedNodeForModal] = useState(null);
   const [libraryOpen, setLibraryOpen] = useState(true);
@@ -525,7 +533,13 @@ function WorkflowBuilder() {
         },
         body: JSON.stringify({
           node_id: nodeId,
-          trigger_data: {},
+          trigger_data: {
+            message: 'Hello, how can I help you today?',
+            text: 'Hello, how can I help you today?',
+            user: 'anonymous',
+            channel: '',
+            timestamp: new Date().toISOString()
+          },
           credentials: {},
         }),
       });
@@ -578,7 +592,216 @@ function WorkflowBuilder() {
       return;
     }
     
-    // For chat model nodes, execute a real test
+    // Execute single node if workflow is saved
+    if (currentWorkflowId) {
+      setIsExecuting(true);
+      setExecutingNodes(prev => new Set([...prev, nodeId]));
+      
+      // Update node execution state to show loading
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  executionState: {
+                    status: 'running',
+                    output: 'Executing...',
+                    startTime: new Date(),
+                    endTime: null
+                  }
+                }
+              }
+            : n
+        )
+      );
+      
+      try {
+        // Load properties from localStorage
+        const enhancedNodes = loadNodesWithProperties(nodes);
+        
+        // Log the properties being sent
+        const targetNode = enhancedNodes.find(n => n.id === nodeId);
+        if (targetNode) {
+          console.log('🔍 Executing node with properties:', {
+            nodeId: targetNode.id,
+            type: targetNode.data.type,
+            properties: targetNode.data.properties,
+            user_message: targetNode.data.properties?.user_message
+          });
+        }
+        
+        // Update workflow with current node properties
+        const updateResponse = await fetch(`/api/workflows/workflows/${currentWorkflowId}/`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nodes: enhancedNodes,
+            edges: edges
+          })
+        });
+        
+        if (!updateResponse.ok) {
+          throw new Error('Failed to update workflow with latest properties');
+        }
+        
+        // Wait a bit to ensure database is updated
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Execute the single node with default trigger data if needed
+        const response = await fetch(`/api/workflows/workflows/${currentWorkflowId}/execute_node/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            node_id: nodeId,
+            trigger_data: {
+              message: 'Hello, how can I help you today?',
+              text: 'Hello, how can I help you today?',
+              user: 'anonymous',
+              channel: '',
+              timestamp: new Date().toISOString()
+            },
+            credentials: {},
+          }),
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          const endTime = new Date();
+          
+          console.log('✅ Single node execution result:', result);
+          
+          // Get node result from execution
+          const nodeState = result.execution?.node_states?.[nodeId];
+          const nodeResult = nodeState?.output || result.execution?.node_results?.[nodeId];
+          
+          // Update node execution state
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === nodeId
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      executionState: {
+                        status: result.status === 'error' ? 'error' : 'completed',
+                        output: nodeResult || 'Execution completed',
+                        startTime: nodeState?.startTime ? new Date(nodeState.startTime) : new Date(),
+                        endTime: endTime
+                      }
+                    }
+                  }
+                : n
+            )
+          );
+          
+          // Store execution data in localStorage
+          const existingData = localStorage.getItem('workflow_execution_data');
+          let executionData = existingData ? JSON.parse(existingData) : {
+            workflow_id: currentWorkflowId,
+            execution_id: result.execution_id || Date.now().toString(),
+            node_states: {},
+            execution_order: [],
+            timestamp: new Date().toISOString()
+          };
+          
+          // Merge new execution data
+          if (result.execution?.node_states) {
+            executionData.node_states = {
+              ...executionData.node_states,
+              ...result.execution.node_states
+            };
+          }
+          
+          if (result.execution?.execution_order) {
+            // Merge execution order, keeping unique nodes
+            const existingOrder = executionData.execution_order || [];
+            const newOrder = result.execution.execution_order || [];
+            executionData.execution_order = [...new Set([...existingOrder, ...newOrder])];
+          }
+          
+          executionData.execution_id = result.execution_id || executionData.execution_id;
+          executionData.timestamp = new Date().toISOString();
+          
+          try {
+            localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+            console.log('💾 Stored single node execution data in localStorage:', {
+              nodeId,
+              nodeStates: Object.keys(executionData.node_states),
+              executionOrder: executionData.execution_order
+            });
+            // Dispatch custom event to notify VariablesPanel
+            window.dispatchEvent(new Event('workflowExecutionUpdate'));
+          } catch (error) {
+            console.error('Error storing execution data:', error);
+          }
+          
+          if (result.status === 'error') {
+            showToast(`❌ Node execution failed: ${result.error || 'Unknown error'}`, 'error', 3000);
+          } else {
+            showToast(`✅ Node "${node.data.label}" executed successfully`, 'success', 2000);
+          }
+        } else {
+          const error = await response.json();
+          showToast(`❌ Execution failed: ${error.error || 'Unknown error'}`, 'error', 3000);
+          
+          // Update node execution state to show error
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === nodeId
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      executionState: {
+                        status: 'error',
+                        output: `❌ ${error.error || 'Execution failed'}`,
+                        startTime: new Date(),
+                        endTime: new Date()
+                      }
+                    }
+                  }
+                : n
+            )
+          );
+        }
+      } catch (error) {
+        console.error('Error executing single node:', error);
+        showToast('❌ Failed to execute node', 'error', 3000);
+        
+        // Update node execution state to show error
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === nodeId
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    executionState: {
+                      status: 'error',
+                      output: `❌ ${error.message || 'Execution failed'}`,
+                      startTime: new Date(),
+                      endTime: new Date()
+                    }
+                  }
+                }
+              : n
+          )
+        );
+      } finally {
+        setIsExecuting(false);
+        setExecutingNodes(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(nodeId);
+          return newSet;
+        });
+      }
+      
+      return;
+    }
+    
+    // For chat model nodes, execute a real test (fallback for unsaved workflows)
     if (node?.data?.type?.includes('groq') || node?.data?.type?.includes('openai') || node?.data?.type?.includes('anthropic')) {
       const startTime = new Date();
       showToast(`🔄 Testing ${node.data.label}...`, 'info', 2000);

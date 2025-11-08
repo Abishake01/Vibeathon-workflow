@@ -118,6 +118,7 @@ class ExecutionContext:
             'duration': duration,
             'execution_order': self.execution_order,
             'node_states': enhanced_node_states,
+            'node_results': self.node_results,  # Include node results for frontend
             'errors': self.errors,
             'chat_response': self.chat_response
         }
@@ -301,14 +302,12 @@ class WorkflowExecutionEngine:
             # Get inputs from connected nodes
             inputs = self._get_node_inputs(node_id, edges, context)
             
-            # Get node executor
-            executor = self._get_node_executor(node)
-            
             # Debug logging for node data
             logger.info(f"Node data for {node_id}: {node}")
             logger.info(f"Node properties: {node.get('data', {}).get('properties', {})}")
             
-            # Evaluate expressions in node properties
+            # Evaluate expressions in node properties BEFORE creating executor
+            # This ensures the executor has access to the latest evaluated properties
             node_properties = node['data'].get('properties', {}).copy()
             eval_context = {
                 'node_results': context.node_results,
@@ -335,6 +334,10 @@ class WorkflowExecutionEngine:
             
             # Update node data with evaluated properties
             node['data']['properties'] = node_properties
+            
+            # Get node executor AFTER properties are evaluated
+            # This ensures executor has access to evaluated properties
+            executor = self._get_node_executor(node)
             
             # Build execution context dict
             exec_context = {
@@ -393,17 +396,25 @@ class WorkflowExecutionEngine:
     ) -> ExecutionContext:
         """Execute entire workflow or from a specific node"""
         
-        # Create execution context
+        # Create execution context with default trigger_data if not provided
+        default_trigger_data = trigger_data or {
+            'message': 'Hello, how can I help you today?',
+            'text': 'Hello, how can I help you today?',
+            'user': 'anonymous',
+            'channel': '',
+            'timestamp': ''
+        }
+        
         context = ExecutionContext(workflow_id, execution_id)
-        context.trigger_data = trigger_data or {}
+        context.trigger_data = default_trigger_data
         context.credentials = credentials or {}
         
         self.active_executions[execution_id] = context
         
         try:
             if start_node_id:
-                # Execute single node and its dependencies
-                await self._execute_from_node(start_node_id, nodes, edges, context, progress_callback)
+                # Execute single node and its dependencies (not downstream nodes)
+                await self._execute_from_node(start_node_id, nodes, edges, context, progress_callback, include_downstream=False)
             else:
                 # Execute entire workflow
                 execution_order = self._topological_sort(nodes, edges)
@@ -477,11 +488,12 @@ class WorkflowExecutionEngine:
         nodes: List[Dict[str, Any]],
         edges: List[Dict[str, Any]],
         context: ExecutionContext,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        include_downstream: bool = False
     ):
         """Execute workflow starting from a specific node"""
-        # Find all nodes that need to be executed (dependencies + target + downstream)
-        nodes_to_execute = self._get_execution_subgraph(start_node_id, nodes, edges)
+        # Find all nodes that need to be executed (dependencies + target, optionally downstream)
+        nodes_to_execute = self._get_execution_subgraph(start_node_id, nodes, edges, include_downstream)
         
         # Execute in topological order
         execution_order = self._topological_sort(
@@ -512,17 +524,20 @@ class WorkflowExecutionEngine:
         self,
         node_id: str,
         nodes: List[Dict[str, Any]],
-        edges: List[Dict[str, Any]]
+        edges: List[Dict[str, Any]],
+        include_downstream: bool = False
     ) -> Set[str]:
         """Get all nodes that should be executed when executing from a specific node"""
         # Get dependencies (upstream nodes)
         dependencies = self._get_dependencies(node_id, edges)
         
-        # Get downstream nodes
-        downstream = self._get_downstream(node_id, edges)
+        # Start with dependencies and the target node
+        result = dependencies | {node_id}
         
-        # Combine all
-        result = dependencies | {node_id} | downstream
+        # Optionally include downstream nodes (for full workflow execution)
+        if include_downstream:
+            downstream = self._get_downstream(node_id, edges)
+            result = result | downstream
         
         return result
     

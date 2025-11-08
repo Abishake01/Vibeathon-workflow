@@ -136,9 +136,21 @@ class AINodeExecutor(BaseNodeExecutor):
             memory_input = inputs.get('memory', {})
             tools_input = inputs.get('tools', [])
             
+            # If main_input is empty, try to get from trigger_data or context
+            if not main_input or (isinstance(main_input, dict) and len(main_input) == 0):
+                trigger_data = context.get('trigger_data', {})
+                if trigger_data:
+                    main_input = {
+                        'text': trigger_data.get('message') or trigger_data.get('text', ''),
+                        'message': trigger_data.get('message') or trigger_data.get('text', ''),
+                        'user': trigger_data.get('user', 'anonymous'),
+                        'channel': trigger_data.get('channel', '')
+                    }
+                    self.log_execution(f"Using trigger data for input: {main_input}")
+            
             # Debug logging
-            # self.log_execution(f"AI Agent inputs: {inputs}")
-            # self.log_execution(f"Tools input: {tools_input}")
+            self.log_execution(f"AI Agent inputs: main_input={main_input} (type: {type(main_input)}), chat_model={bool(chat_model_input)}, memory={bool(memory_input)}, tools={len(tools_input) if tools_input else 0}")
+            self.log_execution(f"All inputs keys: {list(inputs.keys())}")
             
             # Get properties
             system_prompt = self.get_property('prompt', '# AI Agent System Prompt\n\nYou are a helpful AI assistant.')
@@ -457,10 +469,55 @@ class AINodeExecutor(BaseNodeExecutor):
                 tools=tool_instances if tool_instances else []
             )
             
-            # Get prompt from input
-            prompt = main_input.get('text') or main_input.get('message') or main_input.get('prompt', '')
-            if not prompt:
-                raise NodeExecutionError("No prompt provided to AI Agent")
+            # Get prompt from input, node properties, or use default
+            # Priority order:
+            # 1. user_message from node properties (if provided)
+            # 2. Previous node's JSON data (text, message, prompt, content, or any string value)
+            # 3. Default message
+            
+            user_message = self.get_property('user_message', '').strip()
+            self.log_execution(f"Checking user_message property: '{user_message}' (length: {len(user_message)})")
+            self.log_execution(f"All node properties: {list(self.node_data.get('properties', {}).keys())}")
+            
+            # If user_message is provided, use it
+            if user_message:
+                prompt = user_message
+                self.log_execution(f"Using user_message from node properties: '{prompt[:100]}...'")
+            else:
+                # Try to extract query from previous node's JSON data
+                prompt = None
+                
+                # Check common fields in main_input
+                if isinstance(main_input, dict):
+                    # Try common message/text fields
+                    prompt = (
+                        main_input.get('text') or 
+                        main_input.get('message') or 
+                        main_input.get('prompt') or 
+                        main_input.get('content') or
+                        main_input.get('query') or
+                        main_input.get('input')
+                    )
+                    
+                    # If still no prompt, try to find any string value in the dict
+                    if not prompt:
+                        for key, value in main_input.items():
+                            if isinstance(value, str) and value.strip():
+                                prompt = value
+                                self.log_execution(f"Using value from previous node field: {key}")
+                                break
+                    
+                    # If main_input is a string directly, use it
+                elif isinstance(main_input, str) and main_input.strip():
+                    prompt = main_input
+                    self.log_execution("Using string value from previous node")
+                
+                # If still no prompt, use default
+                if not prompt or not prompt.strip():
+                    prompt = "Hello, how can I help you today?"
+                    self.log_execution("No prompt found in previous nodes, using default query")
+                else:
+                    self.log_execution(f"Using query from previous node: {prompt[:100]}...")
             
             self.log_execution(f"Executing AI Agent with prompt: {prompt[:100]}...")
             

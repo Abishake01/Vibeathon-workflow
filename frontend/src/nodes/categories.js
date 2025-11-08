@@ -58,6 +58,11 @@ export const categories = [
     key: 'Output', 
     label: 'Output', 
     description: 'Send output data to various destinations' 
+  },
+  { 
+    key: 'Custom', 
+    label: 'Custom', 
+    description: 'Dynamically registered custom nodes' 
   }
 ];
 
