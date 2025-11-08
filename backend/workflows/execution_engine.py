@@ -16,6 +16,9 @@ from .node_executors import (
     OutputNodeExecutor
 )
 from .node_executors.ai_nodes import ChatModelExecutor, MemoryExecutor, ToolExecutor
+from .node_executors.dynamic_node_executor import DynamicNodeExecutor
+from .expression_evaluator import evaluate_expression
+from .dynamic_nodes import node_registry, DynamicNode
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +135,11 @@ class WorkflowExecutionEngine:
         node_type = node['data']['type']
         node_data = node['data']
         
+        # Check if it's a dynamic node
+        dynamic_node = node_registry.get_node(node_type)
+        if dynamic_node:
+            return DynamicNodeExecutor(node_id, node_type, node_data, dynamic_node)
+        
         # Determine executor based on node type
         executor_class = None
         
@@ -224,6 +232,7 @@ class WorkflowExecutionEngine:
     def _get_node_inputs(self, node_id: str, edges: List[Dict[str, Any]], context: ExecutionContext) -> Dict[str, Any]:
         """Collect inputs for a node from its predecessors"""
         inputs = {}
+        main_inputs = []  # Collect all inputs going to 'main' handle
         
         for edge in edges:
             if edge['target'] == node_id:
@@ -241,8 +250,37 @@ class WorkflowExecutionEngine:
                     else:
                         output_data = source_result
                     
-                    # Store in inputs under the target handle name
-                    inputs[target_input] = output_data
+                    # If multiple nodes connect to 'main', collect them all
+                    if target_input == 'main':
+                        main_inputs.append({
+                            'source_id': source_id,
+                            'data': output_data
+                        })
+                        # Also store by source node ID for direct access
+                        inputs[source_id] = output_data
+                    else:
+                        # Store in inputs under the target handle name
+                        inputs[target_input] = output_data
+        
+        # Handle multiple inputs to 'main' - merge them
+        if len(main_inputs) > 1:
+            # Merge all main inputs into a single object
+            merged_main = {}
+            for main_input in main_inputs:
+                data = main_input['data']
+                if isinstance(data, dict):
+                    merged_main.update(data)
+                else:
+                    # If not a dict, store by source node ID
+                    merged_main[main_input['source_id']] = data
+            inputs['main'] = merged_main
+        elif len(main_inputs) == 1:
+            # Single input to main
+            inputs['main'] = main_inputs[0]['data']
+        
+        # Add main input as 'json' for expression evaluation
+        if 'main' in inputs:
+            inputs['json'] = inputs['main']
         
         return inputs
     
@@ -270,6 +308,34 @@ class WorkflowExecutionEngine:
             logger.info(f"Node data for {node_id}: {node}")
             logger.info(f"Node properties: {node.get('data', {}).get('properties', {})}")
             
+            # Evaluate expressions in node properties
+            node_properties = node['data'].get('properties', {}).copy()
+            eval_context = {
+                'node_results': context.node_results,
+                'json': inputs.get('main', {}),
+                '$vars': {
+                    '$execution': {
+                        'id': context.execution_id,
+                        'mode': 'test'
+                    },
+                    '$workflow': {
+                        'id': context.workflow_id,
+                        'name': 'Workflow'
+                    }
+                }
+            }
+            
+            # Evaluate all property values that might contain expressions
+            for key, value in node_properties.items():
+                if isinstance(value, str) and '${{' in value:
+                    try:
+                        node_properties[key] = evaluate_expression(value, eval_context)
+                    except Exception as e:
+                        logger.warning(f"Failed to evaluate expression for {key}: {e}")
+            
+            # Update node data with evaluated properties
+            node['data']['properties'] = node_properties
+            
             # Build execution context dict
             exec_context = {
                 'execution_id': context.execution_id,
@@ -279,12 +345,21 @@ class WorkflowExecutionEngine:
                 'anthropic_api_key': context.credentials.get('anthropic_api_key'),
                 'google_api_key': context.credentials.get('google_api_key'),
                 'groq_api_key': context.credentials.get('groq_api_key'),
+                'node_results': context.node_results,  # For expression evaluation
+                'json': inputs.get('main', {}),  # Current node input
             }
             
             logger.info(f"Executing node {node_id} ({node_type})")
             
             # Execute node
             result = await executor.execute(inputs, exec_context)
+            
+            # Ensure result is structured JSON
+            if not isinstance(result, dict):
+                result = {'main': result}
+            elif 'main' not in result:
+                # If result is dict but no 'main' key, wrap it
+                result = {'main': result}
             
             # Store result
             context.set_node_result(node_id, result)
@@ -313,7 +388,8 @@ class WorkflowExecutionEngine:
         edges: List[Dict[str, Any]],
         trigger_data: Optional[Dict[str, Any]] = None,
         credentials: Optional[Dict[str, Any]] = None,
-        start_node_id: Optional[str] = None
+        start_node_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None
     ) -> ExecutionContext:
         """Execute entire workflow or from a specific node"""
         
@@ -327,29 +403,81 @@ class WorkflowExecutionEngine:
         try:
             if start_node_id:
                 # Execute single node and its dependencies
-                await self._execute_from_node(start_node_id, nodes, edges, context)
+                await self._execute_from_node(start_node_id, nodes, edges, context, progress_callback)
             else:
                 # Execute entire workflow
                 execution_order = self._topological_sort(nodes, edges)
                 
-                for node_id in execution_order:
+                for idx, node_id in enumerate(execution_order):
                     node = next(n for n in nodes if n['id'] == node_id)
+                    
+                    # Call progress callback
+                    if progress_callback:
+                        await progress_callback({
+                            'type': 'node_start',
+                            'node_id': node_id,
+                            'progress': (idx / len(execution_order)) * 100
+                        })
+                    
                     await self.execute_node(node, edges, context)
+                    
+                    # Call progress callback after node completion
+                    if progress_callback:
+                        await progress_callback({
+                            'type': 'node_complete',
+                            'node_id': node_id,
+                            'result': context.get_node_result(node_id),
+                            'progress': ((idx + 1) / len(execution_order)) * 100
+                        })
             
             context.complete('completed')
+            
+            if progress_callback:
+                await progress_callback({
+                    'type': 'workflow_complete',
+                    'context': context.to_dict()
+                })
             
         except Exception as e:
             logger.error(f"Workflow execution failed: {str(e)}")
             context.complete('error')
+            
+            if progress_callback:
+                await progress_callback({
+                    'type': 'workflow_error',
+                    'error': str(e)
+                })
         
         return context
+    
+    async def execute_single_node(
+        self,
+        node_id: str,
+        workflow_id: str,
+        execution_id: str,
+        nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+        credentials: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[callable] = None
+    ) -> ExecutionContext:
+        """Execute a single node with its dependencies"""
+        return await self.execute_workflow(
+            workflow_id=workflow_id,
+            execution_id=execution_id,
+            nodes=nodes,
+            edges=edges,
+            credentials=credentials,
+            start_node_id=node_id,
+            progress_callback=progress_callback
+        )
     
     async def _execute_from_node(
         self,
         start_node_id: str,
         nodes: List[Dict[str, Any]],
         edges: List[Dict[str, Any]],
-        context: ExecutionContext
+        context: ExecutionContext,
+        progress_callback: Optional[callable] = None
     ):
         """Execute workflow starting from a specific node"""
         # Find all nodes that need to be executed (dependencies + target + downstream)
@@ -361,9 +489,24 @@ class WorkflowExecutionEngine:
             [e for e in edges if e['source'] in nodes_to_execute and e['target'] in nodes_to_execute]
         )
         
-        for node_id in execution_order:
+        for idx, node_id in enumerate(execution_order):
+            if progress_callback:
+                await progress_callback({
+                    'type': 'node_start',
+                    'node_id': node_id,
+                    'progress': (idx / len(execution_order)) * 100
+                })
+            
             node = next(n for n in nodes if n['id'] == node_id)
             await self.execute_node(node, edges, context)
+            
+            if progress_callback:
+                await progress_callback({
+                    'type': 'node_complete',
+                    'node_id': node_id,
+                    'result': context.get_node_result(node_id),
+                    'progress': ((idx + 1) / len(execution_order)) * 100
+                })
     
     def _get_execution_subgraph(
         self,

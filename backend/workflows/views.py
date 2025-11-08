@@ -30,6 +30,10 @@ from .serializers import (
     CustomWidgetSerializer
 )
 from .execution_engine import execution_engine
+from .dynamic_nodes import node_registry
+from .dynamic_tools import tool_registry
+from .custom_nodes import *  # Import to register custom nodes
+from .custom_tools import *  # Import to register custom tools
 
 
 class WorkflowViewSet(viewsets.ModelViewSet):
@@ -530,6 +534,7 @@ def test_api_key(request):
                 response = agent.prompt(test_message)
                 return Response({
                     'valid': True,
+                    'status': 'active',
                     'message': 'Groq API key is valid',
                     'response': response[:100] + '...' if len(response) > 100 else response
                 })
@@ -537,6 +542,7 @@ def test_api_key(request):
                 error_msg = str(e) if str(e) else 'Unknown error occurred'
                 return Response({
                     'valid': False,
+                    'status': 'inactive',
                     'error': f'Groq API key test failed: {error_msg}'
                 })
         
@@ -1073,4 +1079,116 @@ def delete_custom_widget(request, widget_id):
     except Exception as e:
         return Response({
             'error': f'Failed to delete widget: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication, SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def get_dynamic_nodes(request):
+    """Get all dynamically registered nodes"""
+    try:
+        nodes = node_registry.to_frontend_format()
+        return Response({
+            'nodes': nodes,
+            'count': len(nodes)
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({
+            'error': f'Failed to get dynamic nodes: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication, SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def get_dynamic_tools(request):
+    """Get all dynamically registered tools"""
+    try:
+        tools = tool_registry.to_frontend_format()
+        return Response({
+            'tools': tools,
+            'count': len(tools)
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({
+            'error': f'Failed to get dynamic tools: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication, SessionAuthentication])
+@permission_classes([AllowAny])  # Allow access without authentication for now
+def get_node_execution_data(request):
+    """Get execution data for a specific node (for VariablesPanel)"""
+    try:
+        workflow_id = request.data.get('workflow_id')
+        node_id = request.data.get('node_id')
+        
+        if not workflow_id or not node_id:
+            return Response({
+                'error': 'workflow_id and node_id are required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get workflow
+        workflow = get_object_or_404(Workflow, id=workflow_id, user=request.user)
+        
+        # Find the node
+        node = next((n for n in workflow.nodes if n['id'] == node_id), None)
+        if not node:
+            return Response({
+                'error': f'Node {node_id} not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all previous nodes (nodes that connect to this node)
+        previous_nodes = []
+        for edge in workflow.edges:
+            if edge['target'] == node_id:
+                source_node = next((n for n in workflow.nodes if n['id'] == edge['source']), None)
+                if source_node:
+                    previous_nodes.append(source_node['id'])
+        
+        # Get execution results for previous nodes
+        # Check latest execution
+        latest_execution = WorkflowExecution.objects.filter(
+            workflow=workflow
+        ).order_by('-started_at').first()
+        
+        if not latest_execution:
+            return Response({
+                'data': None,
+                'has_data': False,
+                'previous_nodes': previous_nodes
+            }, status=status.HTTP_200_OK)
+        
+        # Get results from previous nodes
+        node_results = {}
+        for prev_node_id in previous_nodes:
+            node_state = latest_execution.node_states.get(prev_node_id, {})
+            if node_state.get('output'):
+                node_results[prev_node_id] = node_state['output']
+        
+        # Get main input data (from first previous node or trigger)
+        main_data = None
+        if previous_nodes:
+            first_prev = previous_nodes[0]
+            if first_prev in node_results:
+                result = node_results[first_prev]
+                if isinstance(result, dict) and 'main' in result:
+                    main_data = result['main']
+                else:
+                    main_data = result
+        
+        return Response({
+            'data': main_data,
+            'has_data': main_data is not None,
+            'previous_nodes': previous_nodes,
+            'node_results': node_results,
+            'execution_id': str(latest_execution.id)
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'error': f'Failed to get node execution data: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

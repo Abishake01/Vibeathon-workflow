@@ -12,14 +12,16 @@ import { nodeTypeDefinitions } from "../../nodeTypes.jsx";
 import { credentialsManager, credentialTypes } from "../../credentialsManager";
 import VariablesPanel from "./VariablesPanel.jsx";
 import ExpressionEditor from "./ExpressionEditor.jsx";
+import ResizablePanels from "./ResizablePanels.jsx";
 
-const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
+const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute, workflowId, onRunPreviousNodes, edges = [], nodes = [] }) => {
   const [properties, setProperties] = useState(node?.data?.properties || {});
   const [nodeName, setNodeName] = useState(node?.data?.label || "");
   const [validationStates, setValidationStates] = useState({});
   const [testingKeys, setTestingKeys] = useState({});
   const [showApiKey, setShowApiKey] = useState({});
   const [inputValues, setInputValues] = useState({});
+  const [apiTestResponses, setApiTestResponses] = useState({}); // Store API test responses
   const [activeTab, setActiveTab] = useState("parameters");
   const [promptModes, setPromptModes] = useState({}); // Store mode per property key
   const [promptExpressions, setPromptExpressions] = useState({});
@@ -177,6 +179,12 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
       });
       if (response.ok) {
         const result = await response.json();
+        // Store the response for display
+        setApiTestResponses((prev) => ({
+          ...prev,
+          [propKey]: result
+        }));
+        
         if (result.valid === true) {
           setValidationStates((prev) => ({ ...prev, [propKey]: "valid" }));
           const newProperties = { ...properties };
@@ -194,9 +202,17 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
         }
       } else {
         setValidationStates((prev) => ({ ...prev, [propKey]: "invalid" }));
+        setApiTestResponses((prev => ({
+          ...prev,
+          [propKey]: { status: 'inactive', error: 'Request failed' }
+        })));
       }
     } catch (error) {
       setValidationStates((prev) => ({ ...prev, [propKey]: "invalid" }));
+      setApiTestResponses((prev => ({
+        ...prev,
+        [propKey]: { status: 'inactive', error: error.message || 'Network error' }
+      })));
     } finally {
       setTestingKeys((prev) => ({ ...prev, [propKey]: false }));
     }
@@ -294,10 +310,28 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
                   <div className="api-key-testing">Testing API key...</div>
                 )}
                 {validationState === "valid" && (
-                  <div className="api-key-valid">✅ API key is valid</div>
+                  <>
+                    <div className="api-key-valid">✅ API key is valid</div>
+                    {apiTestResponses[propKey] && (
+                      <div className="api-key-response">
+                        <pre className="api-key-json">
+                          {JSON.stringify({ status: apiTestResponses[propKey].status || 'active' }, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </>
                 )}
                 {validationState === "invalid" && (
-                  <div className="api-key-invalid">❌ API key is invalid</div>
+                  <>
+                    <div className="api-key-invalid">❌ API key is invalid</div>
+                    {apiTestResponses[propKey] && apiTestResponses[propKey].status && (
+                      <div className="api-key-response">
+                        <pre className="api-key-json">
+                          {JSON.stringify({ status: apiTestResponses[propKey].status }, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -612,8 +646,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
   return (
     <div className="n8n-settings-container">
-      {/* Left Panel - INPUT */}
-      <div className="settings-panel-left">
+      <ResizablePanels initialSizes={[280, 1, 400]} minSizes={[200, 300, 300]}>
+        {/* Left Panel - INPUT */}
+        <div className="settings-panel-left">
         <div className="panel-header">
           <button className="back-button" onClick={handleClose}>
             <FiArrowLeft /> Back to canvas
@@ -652,6 +687,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
           {/* Variables and context Section */}
           <VariablesPanel 
+            workflowId={workflowId}
+            nodeId={node?.id}
+            edges={edges}
+            nodes={nodes}
             onVariableSelect={(variablePath) => {
               // Insert variable into the active expression editor
               if (activeExpressionKey) {
@@ -661,14 +700,15 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
                 }
               }
             }}
+            onRunPreviousNodes={onRunPreviousNodes}
           />
         </div>
-      </div>
+        </div>
 
-      {/* Middle Panel - Node Configuration */}
-      <div className="settings-panel-center">
-        <div className="node-config-card">
-          <div className="node-config-header">
+        {/* Middle Panel - Node Configuration */}
+        <div className="settings-panel-center">
+          <div className="node-config-card">
+            <div className="node-config-header">
             <div className="node-title-section">
               <span className="node-icon-large">{nodeTypeDef?.icon}</span>
               <div>
@@ -1048,11 +1088,11 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
             )}
           </div>
         </div>
-      </div>
+        </div>
 
-      {/* Right Panel - OUTPUT */}
-      <div className="settings-panel-right">
-        <div className="panel-header">
+        {/* Right Panel - OUTPUT */}
+        <div className="settings-panel-right">
+          <div className="panel-header">
           <div className="output-tabs">
             <button
               className={`output-tab ${outputTab === "output" ? "active" : ""}`}
@@ -1121,15 +1161,14 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
             </div>
           )}
         </div>
-      </div>
+        </div>
+      </ResizablePanels>
 
       <style>{`
         .n8n-settings-container {
           position: fixed;
           inset: 0;
           background: var(--background);
-          display: grid;
-          grid-template-columns: 280px 1fr 400px;
           z-index: 1000;
           color: var(--text);
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1142,6 +1181,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           display: flex;
           flex-direction: column;
           overflow: hidden;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
         }
 
         .panel-header {
@@ -1170,8 +1212,12 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
         .panel-content {
           flex: 1;
           overflow-y: auto;
+          overflow-x: hidden;
           padding: 16px;
           background: var(--background);
+          width: 100%;
+          min-width: 0;
+          box-sizing: border-box;
         }
 
         .panel-title {
@@ -1224,7 +1270,14 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
         .settings-panel-center {
           background: var(--surface);
           overflow-y: auto;
+          overflow-x: hidden;
           padding: 20px;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
         }
 
         .node-config-card {
@@ -1232,9 +1285,14 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           border-radius: 8px;
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
           overflow: hidden;
-          max-width: 800px;
+          width: 100%;
+          max-width: 100%;
           margin: 0 auto;
           border: 1px solid var(--border);
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
         }
 
         .node-config-header {
@@ -1342,6 +1400,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
         .config-content {
           padding: 24px;
           background: transparent;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .tip-box {
@@ -1362,6 +1424,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
         .property-field {
           margin-bottom: 20px;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .property-label {
@@ -1382,6 +1448,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
         .property-textarea,
         .property-code {
           width: 100%;
+          max-width: 100%;
           padding: 10px 12px;
           background: var(--background);
           border: 1px solid var(--border);
@@ -1391,6 +1458,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           font-family: inherit;
           transition: border-color 0.2s;
           box-sizing: border-box;
+          min-width: 0;
         }
 
         .property-input:focus,
@@ -1455,6 +1523,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
         .prompt-editor {
           position: relative;
           margin-bottom: 16px;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .editor-icons {
@@ -1472,6 +1544,7 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
         .prompt-textarea {
           width: 100%;
+          max-width: 100%;
           padding: 12px 40px 12px 32px;
           background: var(--background);
           border: 1px solid var(--border);
@@ -1481,6 +1554,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           font-family: monospace;
           resize: vertical;
           min-height: 120px;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .prompt-textarea:focus {
@@ -1512,6 +1587,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
         .result-section {
           margin-top: 16px;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .result-label {
@@ -1524,10 +1603,15 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
         .result-editor {
           position: relative;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .result-textarea {
           width: 100%;
+          max-width: 100%;
           padding: 12px;
           background: var(--background);
           border: 1px solid var(--border);
@@ -1536,6 +1620,8 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           font-size: 13px;
           font-family: monospace;
           resize: vertical;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .result-textarea:focus {
@@ -1773,6 +1859,9 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           display: flex;
           flex-direction: column;
           overflow: hidden;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
         }
 
         .output-tabs {
@@ -1804,6 +1893,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
         .output-content {
           padding: 16px;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .output-header {
@@ -1851,8 +1944,12 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           border-radius: 6px;
           padding: 16px;
           overflow-x: auto;
-          max-height: calc(100vh - 200px);
           overflow-y: auto;
+          max-height: calc(100vh - 200px);
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .json-viewer pre {
@@ -1862,6 +1959,10 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
           color: var(--text);
           white-space: pre-wrap;
           word-wrap: break-word;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
 
         .logs-content {
@@ -1915,6 +2016,21 @@ const NodeSettingsModal = ({ node, onUpdate, onClose, isOpen, onExecute }) => {
 
         .api-key-invalid {
           color: #ef4444;
+        }
+        .api-key-response {
+          margin-top: 8px;
+          padding: 8px;
+          background: var(--background);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+        }
+        .api-key-json {
+          margin: 0;
+          font-family: 'Courier New', monospace;
+          font-size: 11px;
+          color: var(--text);
+          white-space: pre-wrap;
+          word-break: break-word;
         }
 
         .multiselect {

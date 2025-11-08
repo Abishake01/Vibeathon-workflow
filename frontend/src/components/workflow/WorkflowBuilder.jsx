@@ -505,6 +505,70 @@ function WorkflowBuilder() {
     handlersRef.current.handleSettingsClick = null;
   }, []);
 
+  const handleRunPreviousNodes = useCallback(async (nodeId) => {
+    if (!currentWorkflowId) {
+      showToast('Please save the workflow first', 'error', 3000);
+      return;
+    }
+
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    setIsExecuting(true);
+    setExecutingNodes(new Set([nodeId]));
+
+    try {
+      const response = await fetch(`/api/workflows/workflows/${currentWorkflowId}/execute_node/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          node_id: nodeId,
+          trigger_data: {},
+          credentials: {},
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        showToast('✅ Previous nodes executed successfully', 'success', 2000);
+        
+        // Update node execution states
+        if (result.execution?.node_states) {
+          setNodeExecutionStates(result.execution.node_states);
+          
+          // Store execution data in localStorage for VariablesPanel
+          const executionData = {
+            workflow_id: currentWorkflowId || 'local',
+            execution_id: result.execution_id || Date.now().toString(),
+            node_states: result.execution.node_states,
+            execution_order: result.execution.execution_order || Object.keys(result.execution.node_states),
+            timestamp: new Date().toISOString()
+          };
+          
+          try {
+            localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+            console.log('💾 Stored execution data in localStorage (run previous nodes)', executionData);
+            // Dispatch custom event to notify VariablesPanel
+            window.dispatchEvent(new Event('workflowExecutionUpdate'));
+          } catch (error) {
+            console.error('Error storing execution data:', error);
+          }
+        }
+      } else {
+        const error = await response.json();
+        showToast(`Error: ${error.error || 'Failed to execute previous nodes'}`, 'error', 3000);
+      }
+    } catch (error) {
+      console.error('Error executing previous nodes:', error);
+      showToast('Failed to execute previous nodes', 'error', 3000);
+    } finally {
+      setIsExecuting(false);
+      setExecutingNodes(new Set());
+    }
+  }, [currentWorkflowId, nodes, showToast]);
+
   const handleExecutionClick = useCallback(async (nodeId) => {
     const node = nodes.find(n => n.id === nodeId);
     
@@ -984,6 +1048,24 @@ function WorkflowBuilder() {
     // Process node states with animations
     if (result.execution && result.execution.node_states) {
       const nodeStates = result.execution.node_states;
+      
+          // Store execution data in localStorage for VariablesPanel
+          const executionData = {
+            workflow_id: currentWorkflowId || 'local',
+            execution_id: result.execution_id || Date.now().toString(),
+            node_states: nodeStates,
+            execution_order: result.execution.execution_order || Object.keys(nodeStates),
+            timestamp: new Date().toISOString()
+          };
+          
+          try {
+            localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+            console.log('💾 Stored execution data in localStorage (chat)', executionData);
+            // Dispatch custom event to notify VariablesPanel
+            window.dispatchEvent(new Event('workflowExecutionUpdate'));
+          } catch (error) {
+            console.error('Error storing execution data:', error);
+          }
       
       // Animate nodes sequentially
       for (const nodeId of (result.execution.execution_order || Object.keys(nodeStates))) {
@@ -1573,6 +1655,28 @@ function WorkflowBuilder() {
         // Process node states with animations
         if (result.execution && result.execution.node_states) {
           const nodeStates = result.execution.node_states;
+          
+          // Store execution data in localStorage for VariablesPanel
+          const executionData = {
+            workflow_id: workflowId || currentWorkflowId || 'local',
+            execution_id: result.execution_id || Date.now().toString(),
+            node_states: nodeStates,
+            execution_order: result.execution.execution_order || Object.keys(nodeStates),
+            timestamp: new Date().toISOString()
+          };
+          
+          try {
+            localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
+            console.log('💾 Stored execution data in localStorage:', {
+              workflow_id: executionData.workflow_id,
+              node_count: Object.keys(nodeStates).length,
+              execution_order: executionData.execution_order
+            });
+            // Dispatch custom event to notify VariablesPanel
+            window.dispatchEvent(new Event('workflowExecutionUpdate'));
+          } catch (error) {
+            console.error('Error storing execution data:', error);
+          }
           
           // Animate nodes sequentially based on execution order
           for (const nodeId of (result.execution.execution_order || Object.keys(nodeStates))) {
@@ -2392,6 +2496,10 @@ function WorkflowBuilder() {
             setSelectedNodeForModal(null);
           }}
           onExecute={handleExecutionClick}
+          workflowId={currentWorkflowId}
+          onRunPreviousNodes={selectedNodeForModal ? () => handleRunPreviousNodes(selectedNodeForModal.id) : undefined}
+          edges={edges}
+          nodes={nodes}
         />
       )}
 

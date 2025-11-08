@@ -51,12 +51,45 @@ class OutputNodeExecutor(BaseNodeExecutor):
         """Execute README viewer output - just pass through the content"""
         # Get content from input
         content = ''
-        if inputs.get('main'):
-            input_data = inputs['main']
-            if isinstance(input_data, dict):
-                content = input_data.get('text', '') or input_data.get('content', '') or input_data.get('response', '') or str(input_data)
-            else:
-                content = str(input_data)
+        input_data = inputs.get('main', {})
+        
+        # Handle merged inputs from multiple nodes
+        if isinstance(input_data, dict):
+            # Try to extract content from common fields
+            content = (
+                input_data.get('text', '') or 
+                input_data.get('content', '') or 
+                input_data.get('response', '') or 
+                input_data.get('message', '') or
+                input_data.get('output', '')
+            )
+            
+            # If no direct content field, look for agent output
+            if not content:
+                # Check for nested structures (e.g., from AI agent)
+                for key, value in input_data.items():
+                    if isinstance(value, dict):
+                        content = (
+                            value.get('text', '') or 
+                            value.get('content', '') or 
+                            value.get('response', '') or 
+                            value.get('message', '')
+                        )
+                        if content:
+                            break
+                    elif isinstance(value, str) and len(value) > len(content):
+                        content = value
+            
+            # If still no content, stringify the whole object
+            if not content:
+                # Try to create a readable representation
+                import json
+                try:
+                    content = json.dumps(input_data, indent=2)
+                except:
+                    content = str(input_data)
+        else:
+            content = str(input_data)
         
         # Get title from properties
         title = self.get_property('title', 'Content Viewer')

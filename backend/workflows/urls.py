@@ -9,7 +9,8 @@ from .views import (
     ExportedWorkflowViewSet, trigger_chat, test_api_key, ai_chat,
     export_workflow, get_exported_workflow, get_available_memory_types,
     test_memory_connection, get_memory_statistics,
-    save_custom_widget, get_custom_widgets, delete_custom_widget
+    save_custom_widget, get_custom_widgets, delete_custom_widget,
+    get_dynamic_nodes, get_dynamic_tools, get_node_execution_data
 )
 from .auth_views import signup, signin, signout, get_current_user, check_auth, get_csrf_token
 from .ui_builder_views import UIBuilderProjectViewSet
@@ -55,6 +56,11 @@ urlpatterns = [
     path('custom-widgets/', get_custom_widgets, name='get-custom-widgets'),
     path('custom-widgets/save/', save_custom_widget, name='save-custom-widget'),
     path('custom-widgets/<uuid:widget_id>/', delete_custom_widget, name='delete-custom-widget'),
+    
+    # Dynamic Nodes and Tools endpoints
+    path('dynamic-nodes/', get_dynamic_nodes, name='get-dynamic-nodes'),
+    path('dynamic-tools/', get_dynamic_tools, name='get-dynamic-tools'),
+    path('node-execution-data/', get_node_execution_data, name='get-node-execution-data'),
     
     # Router URLs
     path('', include(router.urls)),

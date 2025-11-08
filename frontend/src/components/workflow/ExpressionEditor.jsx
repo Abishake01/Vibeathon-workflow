@@ -44,36 +44,55 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
   // Generate suggestions based on JSON schema
   const generateSuggestions = (text, cursorPos) => {
     const beforeCursor = text.substring(0, cursorPos);
-    const lastDot = beforeCursor.lastIndexOf('.');
-    const lastBracket = beforeCursor.lastIndexOf('[');
-    const lastDollar = beforeCursor.lastIndexOf('$');
+    
+    // Check if we're inside ${{ }} expression
+    const lastOpenExpr = beforeCursor.lastIndexOf('${{');
+    const lastCloseExpr = beforeCursor.lastIndexOf('}}');
+    const isInsideExpression = lastOpenExpr > lastCloseExpr;
+    
+    if (!isInsideExpression) {
+      return [];
+    }
+    
+    // Get text inside the expression
+    const exprStart = lastOpenExpr + 3; // After "${{"
+    const exprText = beforeCursor.substring(exprStart);
+    
+    const lastDot = exprText.lastIndexOf('.');
+    const lastBracket = exprText.lastIndexOf('[');
+    const lastDollar = exprText.lastIndexOf('$');
+    const lastJson = exprText.lastIndexOf('json');
     
     // Get the current context (what user is typing)
     let context = '';
     let startPos = 0;
     
-    if (lastDollar > lastDot && lastDollar > lastBracket) {
-      context = beforeCursor.substring(lastDollar);
-      startPos = lastDollar;
+    if (lastJson > -1 && (lastJson > lastDot || lastDot === -1)) {
+      // User is typing after "json"
+      context = exprText.substring(lastJson + 4); // After "json"
+      startPos = exprStart + lastJson + 4;
+    } else if (lastDollar > lastDot && lastDollar > lastBracket) {
+      context = exprText.substring(lastDollar);
+      startPos = exprStart + lastDollar;
     } else if (lastDot > lastBracket) {
-      context = beforeCursor.substring(lastDot + 1);
-      startPos = lastDot + 1;
+      context = exprText.substring(lastDot + 1);
+      startPos = exprStart + lastDot + 1;
     } else if (lastBracket > -1) {
-      context = beforeCursor.substring(lastBracket + 1);
-      startPos = lastBracket + 1;
+      context = exprText.substring(lastBracket + 1);
+      startPos = exprStart + lastBracket + 1;
     } else {
-      context = beforeCursor;
-      startPos = 0;
+      context = exprText;
+      startPos = exprStart;
     }
 
     const matches = [];
     
-    // Flatten JSON data for suggestions with proper $ prefix
+    // Flatten JSON data for suggestions
     const flattenObject = (obj, prefix = '') => {
       const result = [];
       for (const key in obj) {
-        // Add $ prefix for root level variables
-        const fullPath = prefix ? `${prefix}.${key}` : (key.startsWith('$') ? key : `$${key}`);
+        // For expressions, use json.path format (not $json)
+        const fullPath = prefix ? `${prefix}.${key}` : key;
         const value = obj[key];
         
         if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
@@ -98,22 +117,32 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
       return result;
     };
 
-    const allPaths = flattenObject(jsonData);
+    // Get paths from jsonData, prioritizing $json or json
+    const jsonSource = jsonData.$json || jsonData.json || jsonData;
+    const allPaths = flattenObject(jsonSource, 'json');
+    
+    // Also add $vars paths
+    if (jsonData.$vars) {
+      const varsPaths = flattenObject(jsonData.$vars, '$vars');
+      allPaths.push(...varsPaths);
+    }
     
     // Filter suggestions based on context
     let filtered = [];
     
-    if (context.trim() === '' || context.trim() === '$') {
-      // Show all root level variables when just typing $
+    if (context.trim() === '' || context.trim() === 'json' || context.trim() === '$json') {
+      // Show root level when just typing json
       filtered = allPaths.filter(item => 
-        item.path.startsWith('$') && !item.path.includes('.')
+        item.path.startsWith('json.') && item.path.split('.').length === 2
       ).slice(0, 10);
     } else {
       // Filter based on what user is typing
       const ctx = context.toLowerCase().replace(/[^a-zA-Z0-9_$]/g, '');
       filtered = allPaths.filter(item => {
         const display = item.display.toLowerCase();
-        return display.includes(ctx) || display.startsWith(ctx);
+        const pathParts = display.split('.');
+        const lastPart = pathParts[pathParts.length - 1] || '';
+        return lastPart.includes(ctx) || lastPart.startsWith(ctx) || display.includes(ctx);
       }).slice(0, 10);
     }
 
@@ -130,17 +159,24 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
       onChange(newValue);
     }
 
-    // Show suggestions if typing $ or after . or [
+    // Show suggestions if typing inside ${{ }} expression
     const beforeCursor = newValue.substring(0, cursorPos);
-    const lastChar = beforeCursor[beforeCursor.length - 1];
+    const lastOpenExpr = beforeCursor.lastIndexOf('${{');
+    const lastCloseExpr = beforeCursor.lastIndexOf('}}');
+    const isInsideExpression = lastOpenExpr > lastCloseExpr;
     
-    // Show suggestions when typing $ or after . or [
-    if (beforeCursor.includes('$') || lastChar === '.' || lastChar === '[') {
-      const suggs = generateSuggestions(newValue, cursorPos);
-      if (suggs.length > 0) {
-        setSuggestions(suggs);
-        setShowSuggestions(true);
-        setSelectedIndex(0);
+    if (isInsideExpression) {
+      const lastChar = beforeCursor[beforeCursor.length - 1];
+      // Show suggestions when typing json, $, or after . or [
+      if (beforeCursor.includes('json') || beforeCursor.includes('$') || lastChar === '.' || lastChar === '[') {
+        const suggs = generateSuggestions(newValue, cursorPos);
+        if (suggs.length > 0) {
+          setSuggestions(suggs);
+          setShowSuggestions(true);
+          setSelectedIndex(0);
+        } else {
+          setShowSuggestions(false);
+        }
       } else {
         setShowSuggestions(false);
       }
@@ -175,49 +211,72 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
     const beforeCursor = expression.substring(0, cursorPosition);
     const afterCursor = expression.substring(cursorPosition);
     
-    // Find where to insert
-    let insertPos = cursorPosition;
-    const lastDot = beforeCursor.lastIndexOf('.');
-    const lastBracket = beforeCursor.lastIndexOf('[');
-    const lastDollar = beforeCursor.lastIndexOf('$');
+    // Check if we're inside ${{ }} expression
+    const lastOpenExpr = beforeCursor.lastIndexOf('${{');
+    const lastCloseExpr = beforeCursor.lastIndexOf('}}');
+    const isInsideExpression = lastOpenExpr > lastCloseExpr;
     
-    if (lastDollar > lastDot && lastDollar > lastBracket) {
-      insertPos = lastDollar;
+    if (!isInsideExpression) {
+      // If not inside expression, wrap in ${{ }}
+      const newExpression = beforeCursor + '${{ ' + suggestion.path + ' }}' + afterCursor;
+      setExpression(newExpression);
+      setShowSuggestions(false);
+      if (onChange) {
+        onChange(newExpression);
+      }
+      setTimeout(() => {
+        const newPos = cursorPosition + '${{ '.length + suggestion.path.length + ' }}'.length;
+        textarea.setSelectionRange(newPos, newPos);
+        setCursorPosition(newPos);
+      }, 0);
+      return;
+    }
+    
+    // Inside expression - find where to insert
+    const exprStart = lastOpenExpr + 3; // After "${{"
+    const exprText = beforeCursor.substring(exprStart);
+    
+    let insertPos = cursorPosition;
+    const lastDot = exprText.lastIndexOf('.');
+    const lastBracket = exprText.lastIndexOf('[');
+    const lastJson = exprText.lastIndexOf('json');
+    
+    if (lastJson > -1 && (lastJson > lastDot || lastDot === -1)) {
+      // After "json"
+      insertPos = exprStart + lastJson + 4;
     } else if (lastDot > lastBracket) {
-      insertPos = lastDot + 1;
+      insertPos = exprStart + lastDot + 1;
     } else if (lastBracket > -1) {
-      insertPos = lastBracket + 1;
+      insertPos = exprStart + lastBracket + 1;
+    } else {
+      insertPos = exprStart;
     }
 
     const beforeInsert = expression.substring(0, insertPos);
     const afterInsert = expression.substring(cursorPosition);
     
-    // Get the path to insert (remove common prefix if needed)
+    // Get the path to insert
     let pathToInsert = suggestion.path;
     
-    // If user just typed $, insert the full path
-    if (beforeInsert.trim().endsWith('$') && !beforeInsert.trim().endsWith('.$')) {
-      // User typed $, insert full variable path
-      pathToInsert = suggestion.path.startsWith('$') 
-        ? suggestion.path 
-        : `$${suggestion.path}`;
+    // If user typed "json", use relative path
+    if (beforeInsert.endsWith('json') || beforeInsert.endsWith('json.')) {
+      // Remove "json." prefix if present
+      if (pathToInsert.startsWith('json.')) {
+        pathToInsert = pathToInsert.substring(5);
+      }
     } else if (beforeInsert.endsWith('.')) {
-      // User typed . after a variable, insert just the property name
+      // User typed . after a path, insert just the property name
       const parts = suggestion.path.split('.');
       pathToInsert = parts[parts.length - 1];
-    } else if (lastDollar > -1 && lastDot === -1) {
-      // User is typing after $ but before any dot, replace what they typed
-      const typedAfterDollar = beforeInsert.substring(lastDollar + 1);
-      if (typedAfterDollar.length > 0) {
-        // Replace the typed text with the full path
-        pathToInsert = suggestion.path.startsWith('$') 
-          ? suggestion.path 
-          : `$${suggestion.path}`;
-        insertPos = lastDollar;
-      } else {
-        pathToInsert = suggestion.path.startsWith('$') 
-          ? suggestion.path 
-          : `$${suggestion.path}`;
+    } else if (lastJson > -1) {
+      // Replace what was typed after json
+      const typedAfterJson = beforeInsert.substring(exprStart + lastJson + 4);
+      if (typedAfterJson.length > 0) {
+        // Remove json. prefix and replace typed text
+        if (pathToInsert.startsWith('json.')) {
+          pathToInsert = pathToInsert.substring(5);
+        }
+        insertPos = exprStart + lastJson + 4;
       }
     }
 
@@ -270,7 +329,7 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
   };
 
   return (
-    <div className="expression-editor-wrapper" style={{ position: 'relative' }}>
+    <div className="expression-editor-wrapper" style={{ position: 'relative', width: '100%', maxWidth: '100%', boxSizing: 'border-box', minWidth: 0 }}>
       <textarea
         ref={textareaRef}
         value={expression}
@@ -313,9 +372,14 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
       <style>{`
         .expression-editor-wrapper {
           position: relative;
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          min-width: 0;
         }
         .expression-textarea {
           width: 100%;
+          max-width: 100%;
           padding: 12px;
           background: #0f1724;
           border: 1px solid rgba(255,255,255,0.1);
@@ -326,6 +390,8 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
           resize: vertical;
           min-height: 120px;
           line-height: 1.5;
+          box-sizing: border-box;
+          min-width: 0;
         }
         .expression-textarea:focus {
           outline: none;
@@ -336,6 +402,8 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
           top: 100%;
           left: 0;
           right: 0;
+          width: 100%;
+          max-width: 100%;
           background: #1e1e2f;
           border: 1px solid #3d3d52;
           border-radius: 6px;
@@ -344,6 +412,8 @@ const ExpressionEditor = forwardRef(({ value, onChange, jsonData, placeholder = 
           overflow-y: auto;
           z-index: 1000;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          box-sizing: border-box;
+          min-width: 0;
         }
         .suggestion-item {
           padding: 8px 12px;
