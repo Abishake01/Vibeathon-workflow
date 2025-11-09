@@ -1886,7 +1886,7 @@ button.toolbar-btn.primary svg {
   padding: 12px 16px;
   font-size: 14px;
   line-height: 1.4;
-  color: var(--text);
+  color: #ffffff;
   word-wrap: break-word;
 }
 
@@ -1913,14 +1913,17 @@ button.toolbar-btn.primary svg {
 .message-text-plain {
   white-space: pre-wrap;
   word-wrap: break-word;
+  color: #ffffff;
 }
 
 .message-text-markdown {
   line-height: 1.6;
+  color: #ffffff;
 }
 
 .message-text-markdown .message-line {
   margin-bottom: 4px;
+  color: #ffffff;
 }
 
 /* Markdown styling */
@@ -1928,7 +1931,7 @@ button.toolbar-btn.primary svg {
   font-size: 1.5em;
   font-weight: bold;
   margin: 16px 0 8px 0;
-  color: var(--text);
+  color: #ffffff;
   border-bottom: 2px solid var(--border);
   padding-bottom: 4px;
 }
@@ -1937,19 +1940,19 @@ button.toolbar-btn.primary svg {
   font-size: 1.3em;
   font-weight: bold;
   margin: 14px 0 6px 0;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .markdown-h3 {
   font-size: 1.1em;
   font-weight: bold;
   margin: 12px 0 4px 0;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .markdown-p {
   margin: 8px 0;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .markdown-ul, .markdown-ol {
@@ -1959,7 +1962,7 @@ button.toolbar-btn.primary svg {
 
 .markdown-li {
   margin: 4px 0;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .markdown-blockquote {
@@ -1978,7 +1981,7 @@ button.toolbar-btn.primary svg {
   padding: 2px 6px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .code-container {
@@ -2012,14 +2015,14 @@ button.toolbar-btn.primary svg {
   padding: 12px;
   text-align: left;
   font-weight: bold;
-  color: var(--text);
+  color: #ffffff;
   border-bottom: 2px solid var(--border);
 }
 
 .markdown-td {
   padding: 12px;
   border-bottom: 1px solid var(--border);
-  color: var(--text);
+  color: #ffffff;
 }
 
 .markdown-td:not(:last-child) {
@@ -3493,13 +3496,17 @@ button.toolbar-btn.primary svg {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 16px;
-  color: var(--text);
+  color: #ffffff;
   font-size: 14px;
   resize: none;
   min-height: 20px;
   max-height: 120px;
   font-family: inherit;
   transition: all 0.2s ease;
+}
+
+.input-container textarea::placeholder {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .input-container textarea:focus {

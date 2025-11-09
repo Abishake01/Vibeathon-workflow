@@ -54,6 +54,11 @@ export const categories = [
     key: 'Custom', 
     label: 'Custom', 
     description: 'Dynamically registered custom nodes' 
+  },
+  { 
+    key: 'Web3', 
+    label: 'Web3', 
+    description: 'Blockchain and wallet operations' 
   }
 ];
 

@@ -26,3 +26,7 @@ pydantic>=2.0.0
 # For async support
 asgiref>=3.7.2
 
+# Web3 dependencies
+web3>=6.0.0
+eth-account>=0.8.0
+

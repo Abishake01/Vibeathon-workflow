@@ -5,12 +5,24 @@ import { useDynamicNodes } from '../../hooks/useDynamicNodes';
 
 const NodeLibrary = ({ onAddNode, isOpen, onToggle, nodes = [], logsExpanded = false }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedCategories, setExpandedCategories] = useState(['AI', 'Core']);
+  const [expandedCategories, setExpandedCategories] = useState(['AI', 'Core', 'Web3']);
   const { dynamicNodes } = useDynamicNodes();
 
   // Merge static and dynamic nodes
   const allNodeDefinitions = useMemo(() => {
-    return { ...nodeTypeDefinitions, ...dynamicNodes };
+    const merged = { ...nodeTypeDefinitions, ...dynamicNodes };
+    
+    // Debug: Log web3 nodes
+    const web3Nodes = Object.entries(merged).filter(([key]) => key.startsWith('web3-'));
+    if (web3Nodes.length > 0) {
+      console.log('🔍 Web3 nodes in NodeLibrary:', web3Nodes.map(([key, node]) => ({
+        id: key,
+        name: node.name,
+        category: node.category
+      })));
+    }
+    
+    return merged;
   }, [dynamicNodes]);
 
   const toggleCategory = (categoryKey) => {
@@ -22,13 +34,26 @@ const NodeLibrary = ({ onAddNode, isOpen, onToggle, nodes = [], logsExpanded = f
   };
 
   const getNodesByCategory = (categoryKey) => {
-    return Object.entries(allNodeDefinitions).filter(([key, node]) => {
+    const nodes = Object.entries(allNodeDefinitions).filter(([key, node]) => {
       const matchesCategory = node.category === categoryKey;
       const matchesSearch = searchTerm === '' || 
         node.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (node.description || '').toLowerCase().includes(searchTerm.toLowerCase());
       return matchesCategory && matchesSearch;
     });
+    
+    // Debug logging for Web3 category
+    if (categoryKey === 'Web3') {
+      console.log(`🔍 Web3 category filter:`, {
+        categoryKey,
+        totalNodes: Object.keys(allNodeDefinitions).length,
+        web3Nodes: Object.entries(allNodeDefinitions).filter(([key]) => key.startsWith('web3-')).length,
+        matchedNodes: nodes.length,
+        matchedIds: nodes.map(([key]) => key)
+      });
+    }
+    
+    return nodes;
   };
 
   // Check if a trigger node of the same type already exists

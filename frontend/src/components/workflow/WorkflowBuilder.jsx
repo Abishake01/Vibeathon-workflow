@@ -1268,6 +1268,10 @@ function WorkflowBuilder() {
             const nodeState = result.execution?.node_states?.[nodeId];
             const nodeResult = nodeState?.output || result.execution?.node_results?.[nodeId];
             
+            // Debug: Log node result structure for wallet connection detection
+            console.log('🔍 Wallet Connect Debug - nodeResult:', nodeResult);
+            console.log('🔍 Wallet Connect Debug - nodeResult.main:', nodeResult?.main);
+            
             // Extract formatted output
             let formattedOutput = 'Execution completed';
             if (nodeResult) {
@@ -1402,9 +1406,79 @@ function WorkflowBuilder() {
             if (result.status === 'error') {
               showToast(`❌ Node execution failed: ${result.error || 'Unknown error'}`, 'error', 3000);
             } else {
-              // Show formatted output in toast
-              const shortOutput = formattedOutput.length > 100 ? formattedOutput.substring(0, 100) + '...' : formattedOutput;
-              showToast(`✅ ${node.data.label}: ${shortOutput}`, 'success', 3000);
+              // Check if node requires frontend action (e.g., wallet connection)
+              // nodeResult should be the output object with a 'main' property
+              const mainOutput = nodeResult?.main;
+              
+              console.log('🔍 Wallet Connect Check:', {
+                hasNodeResult: !!nodeResult,
+                hasMain: !!mainOutput,
+                requiresFrontend: mainOutput?.requires_frontend,
+                action: mainOutput?.action,
+                walletType: mainOutput?.wallet_type,
+                chain: mainOutput?.chain
+              });
+              
+              if (mainOutput && mainOutput.requires_frontend && mainOutput.action === 'connect_wallet') {
+                console.log('✅ Wallet connection detected! Triggering connection...');
+                
+                // Use dynamic import for wallet utilities
+                (async () => {
+                  try {
+                    const walletModule = await import('../../utils/wallet');
+                    const { connectWallet } = walletModule;
+                    
+                    const walletType = mainOutput.wallet_type || 'metamask';
+                    const chain = mainOutput.chain || 'ethereum';
+                    
+                    console.log(`🔗 Attempting to connect to ${walletType} on ${chain}...`);
+                    
+                    // Show prominent notification
+                    showToast(`🔗 Please approve the ${walletType} connection in the popup`, 'info', 5000);
+                    
+                    // Small delay to ensure toast is visible before popup
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                    
+                    const walletInfo = await connectWallet(walletType, chain);
+                    
+                    console.log('✅ Wallet connected successfully:', walletInfo);
+                    const shortAddress = walletInfo.address.length > 10 
+                      ? `${walletInfo.address.substring(0, 6)}...${walletInfo.address.substring(walletInfo.address.length - 4)}`
+                      : walletInfo.address;
+                    
+                    const connectionMessage = walletInfo.alreadyConnected 
+                      ? `✅ Wallet already connected: ${shortAddress}`
+                      : `✅ Wallet connected: ${shortAddress}`;
+                    
+                    showToast(connectionMessage, 'success', 4000);
+                    
+                    // Update node output with wallet address
+                    setNodes((nds) =>
+                      nds.map((n) =>
+                        n.id === nodeId
+                          ? {
+                              ...n,
+                              data: {
+                                ...n.data,
+                                executionState: {
+                                  ...n.data.executionState,
+                                  output: `Wallet connected: ${walletInfo.address}`
+                                }
+                              }
+                            }
+                          : n
+                      )
+                    );
+                  } catch (error) {
+                    console.error('❌ Wallet connection error:', error);
+                    showToast(`❌ Wallet connection failed: ${error.message}`, 'error', 4000);
+                  }
+                })();
+              } else {
+                // Show formatted output in toast
+                const shortOutput = formattedOutput.length > 100 ? formattedOutput.substring(0, 100) + '...' : formattedOutput;
+                showToast(`✅ ${node.data.label}: ${shortOutput}`, 'success', 3000);
+              }
             }
           }
         } else {

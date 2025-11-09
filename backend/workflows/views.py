@@ -38,6 +38,15 @@ from .dynamic_tools import tool_registry
 from .custom_nodes import *  # Import to register custom nodes
 from .custom_tools import *  # Import to register custom tools
 
+# Import web3 nodes with error handling
+try:
+    from .web3 import *  # Import to register web3 nodes
+    logger.info("✅ Web3 nodes imported successfully")
+except Exception as e:
+    logger.error(f"❌ Failed to import web3 nodes: {str(e)}")
+    import traceback
+    traceback.print_exc()
+
 
 class WorkflowViewSet(viewsets.ModelViewSet):
     """ViewSet for Workflow CRUD operations"""

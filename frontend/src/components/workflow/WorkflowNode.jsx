@@ -1,18 +1,28 @@
-import { memo, useState } from 'react';
+import { memo, useState, useMemo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { FiLoader, FiPlay, FiTrash2, FiCopy, FiMessageCircle } from 'react-icons/fi';
 import { BsCheckCircle, BsXCircle } from 'react-icons/bs';
 import { nodeTypeDefinitions } from '../../nodeTypes.jsx';
+import { useDynamicNodes } from '../../hooks/useDynamicNodes';
 
 const WorkflowNode = ({ data, selected, id }) => {
   const [showActions, setShowActions] = useState(false);
-  const nodeTypeDef = nodeTypeDefinitions[data.type];
+  const { dynamicNodes } = useDynamicNodes();
+  
+  // Merge static and dynamic node definitions
+  const allNodeDefinitions = useMemo(() => {
+    const merged = { ...nodeTypeDefinitions, ...dynamicNodes };
+    return merged;
+  }, [dynamicNodes]);
+  
+  const nodeTypeDef = allNodeDefinitions[data.type];
   const executionState = data.executionState;
   const executionStatus = data.executionStatus; // From ExecutionsView
   const showStatusIndicator = data.showStatusIndicator; // From ExecutionsView
   const statusIndicator = data.statusIndicator; // 'error' or 'success'
   
   // Determine if this is a trigger node (no inputs)
+  // Only treat as trigger if explicitly marked as 'trigger' nodeType
   const isTrigger = nodeTypeDef?.nodeType === 'trigger';
   const isAgent = nodeTypeDef?.nodeType === 'agent';
   const isChatModel = nodeTypeDef?.nodeType === 'chat-model';
@@ -172,6 +182,19 @@ const WorkflowNode = ({ data, selected, id }) => {
   // Get inputs and outputs from node definition
   const inputs = nodeTypeDef?.inputs || [];
   const outputs = nodeTypeDef?.outputs || [];
+  
+  // Debug logging for web3 nodes
+  if (data.type?.startsWith('web3-')) {
+    console.log(`🔍 Web3 Node Debug [${data.type}]:`, {
+      hasNodeTypeDef: !!nodeTypeDef,
+      inputs: inputs,
+      outputs: outputs,
+      inputsLength: inputs.length,
+      outputsLength: outputs.length,
+      isTrigger: isTrigger,
+      nodeType: nodeTypeDef?.nodeType
+    });
+  }
 
   return (
     <div 

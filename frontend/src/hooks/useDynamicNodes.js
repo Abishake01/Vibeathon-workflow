@@ -50,8 +50,19 @@ export const useDynamicNodes = () => {
                 description: node.description || '',
                 nodeType: node.nodeType || 'action',
                 properties: properties,
+                inputs: node.inputs || [{ name: 'main', type: 'main', required: false, displayName: 'Input' }],
                 outputs: node.outputs || [{ name: 'main', type: 'main', displayName: 'Output' }]
               };
+              
+              // Debug logging for web3 nodes
+              if (node.id?.startsWith('web3-')) {
+                console.log(`🔍 Web3 Node Conversion [${node.id}]:`, {
+                  rawInputs: node.inputs,
+                  rawOutputs: node.outputs,
+                  convertedInputs: convertedNodes[node.id].inputs,
+                  convertedOutputs: convertedNodes[node.id].outputs
+                });
+              }
             });
             setDynamicNodes(convertedNodes);
             console.log('✅ Loaded dynamic nodes:', Object.keys(convertedNodes));

@@ -151,7 +151,15 @@ class DynamicNodeRegistry:
                     }
                     for p in node.parameters
                 ],
-                'inputs': node.input_handles if isinstance(node.input_handles, list) else [node.input_handles] if node.input_handles else [],
+                'inputs': [
+                    {
+                        'name': handle if isinstance(handle, str) else handle.get('name', 'main'),
+                        'type': 'main' if isinstance(handle, str) else handle.get('type', 'main'),
+                        'required': False if isinstance(handle, str) else handle.get('required', False),
+                        'displayName': 'Input' if isinstance(handle, str) else handle.get('displayName', 'Input')
+                    }
+                    for handle in (node.input_handles if isinstance(node.input_handles, list) else [node.input_handles] if node.input_handles else ['main'])
+                ],
                 'outputs': [
                     {
                         'name': handle if isinstance(handle, str) else handle.get('name', 'main'),
