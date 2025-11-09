@@ -219,9 +219,11 @@ function WorkflowBuilder() {
   }, [listenerEventSource]);
 
   // Poll for latest workflow executions when listener is active
+  // NOTE: Polling is a fallback - real-time updates come via SSE
   useEffect(() => {
     // Only poll if listener is running and we have a workflow ID
-    if (listenerStatus === 'running' && currentWorkflowId) {
+    // But skip polling if SSE is connected (to avoid duplicate updates)
+    if (listenerStatus === 'running' && currentWorkflowId && !listenerEventSource) {
       console.log('🔄 Starting execution polling for workflow:', currentWorkflowId);
       
       const pollExecutions = async () => {
@@ -3751,6 +3753,16 @@ function WorkflowBuilder() {
                                 console.log('📥 New webhook request received:', update);
                                 console.log('   Full update object:', JSON.stringify(update, null, 2));
                                 
+                                // Show toast notification
+                                const toastExecutionStatus = update.execution?.status || update.execution?.execution?.status || 'processing';
+                                if (toastExecutionStatus === 'completed') {
+                                  showToast('✅ Webhook request processed successfully', 'success', 3000);
+                                } else if (toastExecutionStatus === 'error') {
+                                  showToast('❌ Webhook request failed', 'error', 4000);
+                                } else {
+                                  showToast('🔄 Processing webhook request...', 'info', 2000);
+                                }
+                                
                                 // Update listener events and count first
                                 setListenerEvents(prev => {
                                   const newEvents = [update, ...prev].slice(0, 50);
@@ -3763,82 +3775,131 @@ function WorkflowBuilder() {
                                   return newCount;
                                 });
                                 
+                                // Get execution data - check both update.execution and update.execution.execution
+                                const executionData = update.execution || {};
+                                const nodeStates = executionData.node_states || executionData.execution?.node_states || {};
+                                const nodeResults = executionData.node_results || executionData.execution?.node_results || {};
+                                const executionOrder = executionData.execution_order || executionData.execution?.execution_order || [];
+                                const executionStatus = executionData.status || executionData.execution?.status || 'completed';
+                                
+                                console.log('🔄 SSE: Execution data available, updating nodes immediately');
+                                console.log('   Execution node_states keys:', Object.keys(nodeStates));
+                                console.log('   Execution node_results keys:', Object.keys(nodeResults));
+                                console.log('   Execution status:', executionStatus);
+                                console.log('   Execution execution_order:', executionOrder);
+                                console.log('   Full node_states:', JSON.stringify(nodeStates, null, 2));
+                                
                                 // Update nodes with execution results from webhook
-                                // This should happen immediately when execution data is available
-                                if (update.execution?.node_states) {
-                                  console.log('🔄 SSE: Execution data available, updating nodes immediately');
-                                  console.log('🔄 SSE: Updating nodes with execution results');
-                                  console.log('   Execution node_states:', Object.keys(update.execution.node_states));
-                                  console.log('   Execution node_results:', Object.keys(update.execution.node_results || {}));
-                                  console.log('   Execution status:', update.execution.status);
-                                  console.log('   Execution execution_order:', update.execution.execution_order);
+                                if (Object.keys(nodeStates).length > 0) {
+                                  const nodesToUpdate = Object.keys(nodeStates);
+                                  const isAlreadyCompleted = executionStatus === 'completed';
                                   
-                                  setNodes((nds) => {
-                                    console.log('   SSE: Current nodes in state:', nds.map(n => n.id));
-                                    return nds.map((n) => {
-                                      const nodeState = update.execution.node_states[n.id];
+                                  // If execution is already completed, update directly
+                                  // Otherwise, show running animation first
+                                  const updateNodesWithResults = () => {
+                                    // Use a single setNodes call to update all nodes at once
+                                    setNodes((nds) => {
+                                      console.log('   SSE: Current nodes in state:', nds.map(n => ({ id: n.id, type: n.data.type })));
+                                      console.log('   SSE: Node states to match:', Object.keys(nodeStates));
+                                      
+                                      const updatedNodes = nds.map((n) => {
+                                      const nodeState = nodeStates[n.id];
+                                      const nodeResult = nodeResults[n.id];
+                                      
                                       if (nodeState) {
-                                        console.log(`   SSE: Processing node ${n.id} (${n.data.type}):`, {
+                                        console.log(`   ✅ SSE: Found matching node ${n.id} (${n.data.type}):`, {
                                           status: nodeState.status,
                                           has_output: !!nodeState.output,
-                                          has_node_result: !!(update.execution.node_results?.[n.id]),
+                                          has_node_result: !!nodeResult,
                                           output_type: nodeState.output ? typeof nodeState.output : 'none',
                                           nodeState_keys: Object.keys(nodeState)
                                         });
                                         
-                                        // Extract output for display
+                                        // Extract output for display - priority: nodeState.output > nodeResult > nodeState
                                         let formattedOutput = '';
-                                        const nodeResult = nodeState.output || update.execution.node_results?.[n.id];
+                                        const outputToFormat = nodeState.output || nodeResult || nodeState;
                                         
-                                        if (nodeResult) {
-                                          if (typeof nodeResult === 'string') {
-                                            formattedOutput = nodeResult;
-                                          } else if (nodeResult.main) {
-                                            if (typeof nodeResult.main === 'string') {
-                                              formattedOutput = nodeResult.main;
-                                            } else if (nodeResult.main.content) {
-                                              formattedOutput = nodeResult.main.content;
-                                            } else if (nodeResult.main.text) {
-                                              formattedOutput = nodeResult.main.text;
+                                        if (outputToFormat) {
+                                          if (typeof outputToFormat === 'string') {
+                                            formattedOutput = outputToFormat;
+                                          } else if (outputToFormat.main) {
+                                            if (typeof outputToFormat.main === 'string') {
+                                              formattedOutput = outputToFormat.main;
+                                            } else if (outputToFormat.main.content) {
+                                              formattedOutput = outputToFormat.main.content;
+                                            } else if (outputToFormat.main.text) {
+                                              formattedOutput = outputToFormat.main.text;
                                             } else {
                                               // For webhook trigger, show the full structure
-                                              formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                                              formattedOutput = JSON.stringify(outputToFormat.main, null, 2);
                                             }
-                                          } else if (nodeResult.content) {
-                                            formattedOutput = nodeResult.content;
-                                          } else if (nodeResult.text) {
-                                            formattedOutput = nodeResult.text;
+                                          } else if (outputToFormat.content) {
+                                            formattedOutput = outputToFormat.content;
+                                          } else if (outputToFormat.text) {
+                                            formattedOutput = outputToFormat.text;
                                           } else {
                                             // For webhook trigger node, show the full output structure
-                                            formattedOutput = JSON.stringify(nodeResult, null, 2);
+                                            formattedOutput = JSON.stringify(outputToFormat, null, 2);
                                           }
                                         }
                                         
                                         // Special handling for webhook trigger node - show webhook data
-                                        if (n.data.type === 'webhook' && nodeResult && typeof nodeResult === 'object') {
-                                          if (nodeResult.main && typeof nodeResult.main === 'object') {
+                                        if (n.data.type === 'webhook' && outputToFormat && typeof outputToFormat === 'object') {
+                                          if (outputToFormat.main && typeof outputToFormat.main === 'object') {
                                             // Show webhook payload in a readable format
-                                            const webhookData = nodeResult.main.data || nodeResult.main;
+                                            const webhookData = outputToFormat.main.data || outputToFormat.main;
                                             if (webhookData && webhookData.body) {
                                               formattedOutput = `Webhook received:\n${JSON.stringify(webhookData.body, null, 2)}`;
                                             } else {
-                                              formattedOutput = JSON.stringify(nodeResult.main, null, 2);
+                                              formattedOutput = JSON.stringify(outputToFormat.main, null, 2);
                                             }
                                           }
                                         }
                                         
-                                        console.log(`   SSE: Node ${n.id} formatted output length:`, formattedOutput.length);
+                                        // Determine status - use nodeState.status if available, otherwise infer from execution status
+                                        let nodeStatus = nodeState.status;
+                                        if (!nodeStatus) {
+                                          nodeStatus = executionStatus === 'completed' ? 'completed' : 
+                                                      executionStatus === 'error' ? 'error' : 'running';
+                                        }
                                         
-                                        // Update node with execution state
+                                        // Parse timestamps - handle both milliseconds and ISO strings
+                                        let startTime = new Date();
+                                        let endTime = new Date();
+                                        
+                                        if (nodeState.startTime) {
+                                          startTime = typeof nodeState.startTime === 'number' 
+                                            ? new Date(nodeState.startTime) 
+                                            : new Date(nodeState.startTime);
+                                        }
+                                        
+                                        if (nodeState.endTime) {
+                                          endTime = typeof nodeState.endTime === 'number' 
+                                            ? new Date(nodeState.endTime) 
+                                            : new Date(nodeState.endTime);
+                                        } else if (executionData.finished_at || executionData.execution?.finished_at) {
+                                          const finishedAt = executionData.finished_at || executionData.execution?.finished_at;
+                                          endTime = typeof finishedAt === 'string' ? new Date(finishedAt) : new Date(finishedAt);
+                                        }
+                                        
+                                        // Create execution state object
                                         const executionState = {
-                                          status: nodeState.status || 'completed',
-                                          output: formattedOutput || nodeResult,
-                                          startTime: nodeState.startTime ? new Date(nodeState.startTime) : new Date(),
-                                          endTime: nodeState.endTime ? new Date(nodeState.endTime) : new Date()
+                                          status: nodeStatus,
+                                          output: formattedOutput || outputToFormat || '',
+                                          startTime: startTime,
+                                          endTime: endTime,
+                                          error: nodeState.error || null
                                         };
                                         
-                                        console.log(`   SSE: Updating node ${n.id} with execution state:`, executionState.status);
+                                        console.log(`   ✅ SSE: Updating node ${n.id} with execution state:`, {
+                                          status: executionState.status,
+                                          hasOutput: !!executionState.output,
+                                          outputLength: executionState.output ? executionState.output.length : 0,
+                                          startTime: executionState.startTime.toISOString(),
+                                          endTime: executionState.endTime.toISOString()
+                                        });
                                         
+                                        // Return updated node with execution state
                                         return {
                                           ...n,
                                           data: {
@@ -3847,47 +3908,102 @@ function WorkflowBuilder() {
                                           }
                                         };
                                       } else {
-                                        // Log if node is not in execution results
-                                        if (n.data.type === 'webhook') {
-                                          console.warn(`⚠️ SSE: Webhook trigger node ${n.id} not found in execution node_states`);
-                                          console.warn(`   Available node IDs in execution:`, Object.keys(update.execution.node_states));
+                                        // Node not in execution - check if it should be cleared
+                                        // Only clear if it was previously executing
+                                        if (n.data.executionState && n.data.executionState.status === 'running') {
+                                          console.log(`   ⚠️ SSE: Node ${n.id} was running but not in execution results - clearing state`);
+                                          return {
+                                            ...n,
+                                            data: {
+                                              ...n.data,
+                                              executionState: null
+                                            }
+                                          };
                                         }
                                       }
                                       return n;
                                     });
-                                  });
+                                    
+                                      console.log('   ✅ SSE: Updated nodes:', updatedNodes.map(n => ({
+                                        id: n.id,
+                                        hasExecutionState: !!n.data.executionState,
+                                        status: n.data.executionState?.status
+                                      })));
+                                      
+                                      return updatedNodes;
+                                    });
+                                    
+                                    // Force React Flow to update by triggering a re-render
+                                    setFlowKey(prev => prev + 1);
+                                  };
+                                  
+                                  if (isAlreadyCompleted) {
+                                    // Execution already completed - update directly
+                                    console.log('   ✅ SSE: Execution already completed, updating nodes directly');
+                                    updateNodesWithResults();
+                                  } else {
+                                    // First, set nodes to running state briefly for animation
+                                    console.log('   🎬 SSE: Setting nodes to running state for animation:', nodesToUpdate);
+                                    
+                                    setNodes((nds) => {
+                                      return nds.map((n) => {
+                                        if (nodesToUpdate.includes(n.id)) {
+                                          return {
+                                            ...n,
+                                            data: {
+                                              ...n.data,
+                                              executionState: {
+                                                status: 'running',
+                                                output: 'Executing...',
+                                                startTime: new Date()
+                                              }
+                                            }
+                                          };
+                                        }
+                                        return n;
+                                      });
+                                    });
+                                    
+                                    // Then after a short delay, update with actual results
+                                    setTimeout(updateNodesWithResults, 300); // 300ms delay for running animation
+                                  }
                                   
                                   // Also update localStorage for README viewer
                                   try {
                                     const existingData = localStorage.getItem('workflow_execution_data');
-                                    let executionData = existingData ? JSON.parse(existingData) : {
+                                    let executionDataForStorage = existingData ? JSON.parse(existingData) : {
                                       workflow_id: currentWorkflowId,
-                                      execution_id: update.execution?.execution_id || Date.now().toString(),
+                                      execution_id: executionData.execution_id || executionData.execution?.execution_id || Date.now().toString(),
                                       node_states: {},
                                       node_results: {},
                                       execution_order: [],
                                       timestamp: new Date().toISOString()
                                     };
                                     
-                                    if (update.execution?.node_states) {
-                                      executionData.node_states = {
-                                        ...executionData.node_states,
-                                        ...update.execution.node_states
+                                    if (nodeStates) {
+                                      executionDataForStorage.node_states = {
+                                        ...executionDataForStorage.node_states,
+                                        ...nodeStates
                                       };
                                     }
                                     
-                                    if (update.execution?.node_results) {
-                                      executionData.node_results = {
-                                        ...executionData.node_results,
-                                        ...update.execution.node_results
+                                    if (nodeResults) {
+                                      executionDataForStorage.node_results = {
+                                        ...executionDataForStorage.node_results,
+                                        ...nodeResults
                                       };
                                     }
                                     
-                                    executionData.execution_id = update.execution?.execution_id || executionData.execution_id;
-                                    executionData.timestamp = new Date().toISOString();
+                                    if (executionOrder.length > 0) {
+                                      executionDataForStorage.execution_order = [...new Set([...executionDataForStorage.execution_order, ...executionOrder])];
+                                    }
                                     
-                                    localStorage.setItem('workflow_execution_data', JSON.stringify(executionData));
-                                    console.log('💾 Updated localStorage with execution data');
+                                    executionDataForStorage.execution_id = executionData.execution_id || executionData.execution?.execution_id || executionDataForStorage.execution_id;
+                                    executionDataForStorage.timestamp = new Date().toISOString();
+                                    
+                                    localStorage.setItem('workflow_execution_data', JSON.stringify(executionDataForStorage));
+                                    console.log('💾 SSE: Updated localStorage with execution data');
+                                    window.dispatchEvent(new Event('workflowExecutionUpdate'));
                                   } catch (e) {
                                     console.error('Error updating localStorage:', e);
                                   }
@@ -4416,11 +4532,12 @@ function WorkflowBuilder() {
                         <div style={{
                           fontSize: '11px',
                           padding: '2px 8px',
-                          backgroundColor: event.execution?.status === 'completed' ? '#10b981' : '#f59e0b',
+                          backgroundColor: (event.execution?.status || event.execution?.execution?.status) === 'completed' ? '#10b981' : 
+                                         (event.execution?.status || event.execution?.execution?.status) === 'error' ? '#ef4444' : '#f59e0b',
                           color: 'white',
                           borderRadius: '4px'
                         }}>
-                          {event.execution?.status || 'processing'}
+                          {event.execution?.status || event.execution?.execution?.status || 'processing'}
                         </div>
                       </div>
                       
@@ -4437,7 +4554,8 @@ function WorkflowBuilder() {
                               borderRadius: '4px',
                               overflow: 'auto',
                               maxHeight: '100px',
-                              margin: 0
+                              margin: 0,
+                              color: '#fff'
                             }}>
                               {JSON.stringify(event.request.body, null, 2)}
                             </pre>
@@ -4445,22 +4563,42 @@ function WorkflowBuilder() {
                         </div>
                       )}
                       
-                      {event.execution?.data && Object.keys(event.execution.data).length > 0 && (
+                      {(event.execution?.data || event.execution?.execution?.node_states) && (
                         <div>
                           <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: theme === 'dark' ? '#fff' : '#333' }}>
-                            Output:
+                            Execution Results:
                           </div>
-                          <pre style={{
-                            fontSize: '10px',
-                            padding: '8px',
-                            backgroundColor: theme === 'dark' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(16, 185, 129, 0.05)',
-                            borderRadius: '4px',
-                            overflow: 'auto',
-                            maxHeight: '150px',
-                            margin: 0
-                          }}>
-                            {JSON.stringify(event.execution.data, null, 2)}
-                          </pre>
+                          {event.execution?.execution?.node_states && (
+                            <div style={{ marginBottom: '8px' }}>
+                              <div style={{ fontSize: '10px', color: theme === 'dark' ? '#aaa' : '#666', marginBottom: '4px' }}>
+                                Nodes executed: {Object.keys(event.execution.execution.node_states).length}
+                              </div>
+                              {Object.entries(event.execution.execution.node_states).slice(0, 3).map(([nodeId, nodeState]) => (
+                                <div key={nodeId} style={{
+                                  fontSize: '10px',
+                                  padding: '4px 8px',
+                                  backgroundColor: theme === 'dark' ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.05)',
+                                  borderRadius: '4px',
+                                  marginBottom: '4px'
+                                }}>
+                                  <strong>{nodeId.substring(0, 8)}...</strong>: {nodeState.status || 'completed'}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {event.execution?.data && Object.keys(event.execution.data).length > 0 && (
+                            <pre style={{
+                              fontSize: '10px',
+                              padding: '8px',
+                              backgroundColor: theme === 'dark' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(16, 185, 129, 0.05)',
+                              borderRadius: '4px',
+                              overflow: 'auto',
+                              maxHeight: '150px',
+                              margin: 0
+                            }}>
+                              {JSON.stringify(event.execution.data, null, 2)}
+                            </pre>
+                          )}
                         </div>
                       )}
                     </div>
@@ -4629,4 +4767,5 @@ function WorkflowBuilder() {
 }
 
 export default WorkflowBuilder;
+
 

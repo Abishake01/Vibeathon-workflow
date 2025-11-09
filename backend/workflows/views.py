@@ -555,17 +555,28 @@ def trigger_webhook(request, workflow_id: str, webhook_path: str = ''):
                 
                 logger.info(f"Looking for listeners for workflow {workflow_id_str}, found {len(workflow_listeners)} listeners")
                 
+                # Ensure execution_dict has all required fields for frontend
+                execution_dict['node_results'] = context.node_results  # Ensure node_results is included
+                execution_dict['node_states'] = enhanced_node_states  # Use enhanced states with outputs
+                execution_dict['execution_order'] = context.execution_order
+                execution_dict['started_at'] = context.start_time.isoformat()
+                execution_dict['finished_at'] = context.end_time.isoformat() if context.end_time else None
+                
                 # Use the already-prepared enhanced_node_states and execution_dict
                 execution_result = {
                     'execution_id': execution_id,
                     'status': context.status,
                     'data': response_data,
-                    'execution': execution_dict
+                    'execution': execution_dict,
+                    'node_states': enhanced_node_states,  # Direct access for frontend
+                    'node_results': context.node_results,  # Direct access for frontend
+                    'execution_order': context.execution_order
                 }
                 
                 logger.info(f"📤 Broadcasting execution result to {len(workflow_listeners)} listeners")
                 logger.info(f"   Execution has {len(enhanced_node_states)} node states with outputs")
                 logger.info(f"   Node IDs in execution: {list(enhanced_node_states.keys())}")
+                logger.info(f"   Execution order: {context.execution_order}")
                 
                 for listener_info in workflow_listeners:
                     listener_id = listener_info['listener_id']
